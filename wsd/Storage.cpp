@@ -463,6 +463,42 @@ Poco::Net::HTTPClientSession* StorageBase::getHTTPClientSession(const Poco::URI&
     return session;
 }
 
+// std::shared_ptr<ClientSocket> StorageBase::getHTTPSocket(const Poco::URI& uri)
+// {
+//     bool useSSL = false;
+//     if (SSLAsScheme)
+//     {
+//         // the WOPI URI itself should control whether we use SSL or not
+//         // for whether we verify vs. certificates, cf. above
+//         useSSL = uri.getScheme() != "http";
+//     }
+//     else
+//     {
+//         // We decoupled the Wopi communication from client communication because
+//         // the Wopi communication must have an independent policy.
+//         // So, we will use here only Storage settings.
+//         useSSL = SSLEnabled || LOOLWSD::isSSLTermination();
+//     }
+
+//     return std::make_shared<ClientSocket>(uri.getHost(), uri.getPort(), useSSL);
+
+//     // We decoupled the Wopi communication from client communication because
+//     // the Wopi communication must have an independent policy.
+//     // So, we will use here only Storage settings.
+//     // auto socket = useSSL
+//     //     ? SslStreamSocket::create<SslStreamSocket>()
+//     //     // new Poco::Net::HTTPSClientSession(uri.getHost(), uri.getPort(),
+//     //     //                                     Poco::Net::SSLManager::instance().defaultClientContext())
+//     //     : StreamSocket::create<StreamSocket>(uri.getHost(), uri.getPort());
+
+//     // Set the timeout to the configured value.
+//     // static int timeoutSec = LOOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
+//     // session->setTimeout(Poco::Timespan(timeoutSec, 0));
+
+//     // return socket;
+//     // return nullptr;
+// }
+
 namespace
 {
 

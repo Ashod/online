@@ -256,6 +256,18 @@ public:
                              const std::string& saveAsFilename, const bool isRename)
         = 0;
 
+    /// Writes the contents of the file back to the source asynchronously, if possible.
+    /// @param cookies A string representing key=value pairs that are set as cookies.
+    /// @param savedFile When the operation was saveAs, this is the path to the file that was saved.
+    virtual UploadResult
+    uploadLocalFileToStorageAsync(const Authorization& auth, const std::string& cookies,
+                                  LockContext& lockCtx, const std::string& saveAsPath,
+                                  const std::string& saveAsFilename, const bool isRename)
+    {
+        // By default do a synchronous save.
+        return uploadLocalFileToStorage(auth, cookies, lockCtx, saveAsPath, saveAsFilename, isRename);
+    }
+
     /// Must be called at startup to configure.
     static void initialize();
 
@@ -267,6 +279,7 @@ public:
 
     static bool allowedWopiHost(const std::string& host);
     static Poco::Net::HTTPClientSession* getHTTPClientSession(const Poco::URI& uri);
+    // static std::shared_ptr<ClientSocket> getHTTPSocket(const Poco::URI& uri);
 
 protected:
 
