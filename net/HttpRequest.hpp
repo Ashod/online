@@ -22,20 +22,19 @@
 
 namespace Poco
 {
-    class MemoryInputStream;
-    namespace Net
-    {
-        class HTTPRequest;
-        class HTTPResponse;
-    }
-    class URI;
-}
+class MemoryInputStream;
+namespace Net
+{
+class HTTPRequest;
+class HTTPResponse;
+} // namespace Net
+class URI;
+} // namespace Poco
 
 /// An HTTP Header.
 class HttpHeader
 {
 public:
-
     /// Set an HTTP header entry.
     void set(const std::string& key, const std::string& value)
     {
@@ -69,7 +68,7 @@ public:
     void setUrl(const std::string& url) { _url = url; }
     const std::string& getUrl() const { return _url; }
 
-    HttpHeader& header() { return _header;}
+    HttpHeader& header() { return _header; }
 
 private:
     std::string _startLine;
@@ -82,20 +81,20 @@ class HttpResponse final
 {
 public:
     HttpResponse()
-    :_statusCategory(StatusCategory::Informational)
-    {}
+        : _statusCategory(StatusCategory::Informational)
+    {
+    }
 
     enum class StatusCategory
     {
-        Informational,  //< Request being processed, not final response.
-        Successful,     //< Successfully processed request, response on the way.
-        Redirection,    //< Redirected to a different resource.
-        Client_Error,   //< Bad request, cannot respond.
-        Server_Error    //< Bad server, cannot respond.
+        Informational, //< Request being processed, not final response.
+        Successful, //< Successfully processed request, response on the way.
+        Redirection, //< Redirected to a different resource.
+        Client_Error, //< Bad request, cannot respond.
+        Server_Error //< Bad server, cannot respond.
     };
 
-    StatusCategory statusCategory() const { return _statusCategory;}
-
+    StatusCategory statusCategory() const { return _statusCategory; }
 
     const HttpHeader& header() const { return _header; }
     HttpHeader& header() { return _header; }
@@ -118,14 +117,13 @@ class HttpSession final : public ProtocolHandlerInterface
     }
 
 public:
-
     enum class State
     {
         New,
-        SendRequest,    //< Request sending needed or in progress.
-        RecvHeader,     //< Response header reading in progress.
-        RecvBody,       //< Response body reading in progress.
-        Finished        //< A request has been satisfied.
+        SendRequest, //< Request sending needed or in progress.
+        RecvHeader, //< Response header reading in progress.
+        RecvBody, //< Response body reading in progress.
+        Finished //< A request has been satisfied.
     };
 
     static std::shared_ptr<HttpSession> create(const std::string& host, const std::string& port,
@@ -143,7 +141,7 @@ public:
     const std::string& port() const { return _port; }
     bool secure() const { return _secure; }
 
-    State state() const { return _state;}
+    State state() const { return _state; }
 
     const HttpResponse& response() const { return _response; }
 
@@ -168,12 +166,12 @@ public:
         LOG_TRC('#' << socket->getFD() << " Connected.");
     }
 
-    void shutdown(bool /*goingAway*/, const std::string &/*statusMessage*/) override
+    void shutdown(bool /*goingAway*/, const std::string& /*statusMessage*/) override
     {
         std::cout << "shutdown\n";
     }
 
-    void getIOStats(uint64_t &sent, uint64_t &recv) override
+    void getIOStats(uint64_t& sent, uint64_t& recv) override
     {
         std::cout << "getIOStats\n";
         // std::shared_ptr<StreamSocket> socket = getSocket().lock();
@@ -192,32 +190,31 @@ public:
         std::string res(_socket->getInBuffer().data(), _socket->getInBuffer().size());
         std::cout << res;
 
+        //         std::shared_ptr<StreamSocket> socket = _socket.lock();
 
-//         std::shared_ptr<StreamSocket> socket = _socket.lock();
+        // #if MOBILEAPP
+        //         // No separate "upgrade" is going on
+        //         if (socket && !socket->isWebSocket())
+        //             socket->setWebSocket();
+        // #endif
 
-// #if MOBILEAPP
-//         // No separate "upgrade" is going on
-//         if (socket && !socket->isWebSocket())
-//             socket->setWebSocket();
-// #endif
-
-//         if (!socket)
-//         {
-//             LOG_ERR("No socket associated with WebSocketHandler " << this);
-//         }
-// #if !MOBILEAPP
-//         else if (_isClient && !socket->isWebSocket())
-//             handleClientUpgrade(socket);
-// #endif
-//         else
-//         {
-//             while (socket->processInputEnabled() && handleTCPStream(socket))
-//                 ; // might have multiple messages in the accumulated buffer.
-//         }
+        //         if (!socket)
+        //         {
+        //             LOG_ERR("No socket associated with WebSocketHandler " << this);
+        //         }
+        // #if !MOBILEAPP
+        //         else if (_isClient && !socket->isWebSocket())
+        //             handleClientUpgrade(socket);
+        // #endif
+        //         else
+        //         {
+        //             while (socket->processInputEnabled() && handleTCPStream(socket))
+        //                 ; // might have multiple messages in the accumulated buffer.
+        //         }
     }
 
     int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
-                      int64_t & /*timeoutMaxMicroS*/) override
+                      int64_t& /*timeoutMaxMicroS*/) override
     {
         std::cout << "getPollEvents\n";
         int events = POLLIN;
@@ -245,10 +242,7 @@ public:
         }
     }
 
-    void onDisconnect() override
-    {
-        std::cout << "onDisconnect\n";
-    }
+    void onDisconnect() override { std::cout << "onDisconnect\n"; }
 
     bool connect();
 
@@ -307,7 +301,8 @@ inline bool HttpSession::connect()
                 {
 #if ENABLE_SSL
                     if (_secure)
-                        _socket = StreamSocket::create<SslStreamSocket>(fd, true, shared_from_this());
+                        _socket
+                            = StreamSocket::create<SslStreamSocket>(fd, true, shared_from_this());
 #endif
                     if (!_socket && !_secure)
                         _socket = StreamSocket::create<StreamSocket>(fd, true, shared_from_this());
