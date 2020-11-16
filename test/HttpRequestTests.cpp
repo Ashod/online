@@ -49,10 +49,17 @@ void HttpRequestTests::testSimpleGet()
     SocketPoll pollThread("HttpRequestPoll");
     pollThread.startThread();
 
-    HttpRequest httpRequest("example.com", "80", false);
-    httpRequest.asyncGet("/", pollThread);
+    HttpRequest httpRequest;
+    httpRequest.setUrl("/");
+    httpRequest.set("Host", "www.example.com");
+    // httpRequest.set("Connection", "upgrade");
+    // httpRequest.set("Upgrade", "upgrade");
 
-    // httpRequest.
+    auto httpSession = HttpSession::create("example.com", 80, false);
+    httpSession->asyncGet(httpRequest, pollThread);
+
+    for (int i = 0; i < 10; ++i)
+        sleep(1);
     // pollThread.insertNewSocket(const std::shared_ptr<Socket> &newSocket);
 
     pollThread.joinThread();
