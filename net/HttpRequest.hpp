@@ -47,7 +47,7 @@ public:
         std::ostringstream oss;
         for (const auto& pair : _headers)
         {
-            oss << pair.first << ": " << pair.second << '\n';
+            oss << pair.first << ": " << pair.second << "\r\n";
         }
 
         return oss.str();
@@ -60,16 +60,49 @@ private:
 };
 
 /// An HTTP Request made over HttpSession.
-class HttpRequest final : public HttpHeader
+class HttpRequest final
 {
 public:
+    static constexpr const char* VERB_GET = "GET";
+    static constexpr const char* VERB_POST = "POST";
 
     void setUrl(const std::string& url) { _url = url; }
     const std::string& getUrl() const { return _url; }
 
+    HttpHeader& header() { return _header;}
+
 private:
+    std::string _startLine;
+    HttpHeader _header;
     /// The URL to request.
     std::string _url;
+};
+
+class HttpResponse final
+{
+public:
+    HttpResponse()
+    :_statusCategory(StatusCategory::Informational)
+    {}
+
+    enum class StatusCategory
+    {
+        Informational,  //< Request being processed, not final response.
+        Successful,     //< Successfully processed request, response on the way.
+        Redirection,    //< Redirected to a different resource.
+        Client_Error,   //< Bad request, cannot respond.
+        Server_Error    //< Bad server, cannot respond.
+    };
+
+    StatusCategory statusCategory() const { return _statusCategory;}
+
+
+    const HttpHeader& header() const { return _header; }
+    HttpHeader& header() { return _header; }
+
+private:
+    HttpHeader _header;
+    StatusCategory _statusCategory;
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -80,7 +113,7 @@ class HttpSession final : public ProtocolHandlerInterface
         : _host(host)
         , _port(port)
         , _secure(secure)
-        , _haveNewReq(false)
+        , _state(State::New)
     {
     }
 
@@ -88,10 +121,11 @@ public:
 
     enum class State
     {
-        Disconnected,
-        Connected,      //<
-        Requesting,     //< A request is in progress.
-
+        New,
+        SendRequest,    //< Request sending needed or in progress.
+        RecvHeader,     //< Response header reading in progress.
+        RecvBody,       //< Response body reading in progress.
+        Finished        //< A request has been satisfied.
     };
 
     static std::shared_ptr<HttpSession> create(const std::string& host, const std::string& port,
@@ -109,24 +143,27 @@ public:
     const std::string& port() const { return _port; }
     bool secure() const { return _secure; }
 
+    State state() const { return _state;}
+
+    const HttpResponse& response() const { return _response; }
+
     void asyncGet(const HttpRequest& req, SocketPoll& poll)
     {
         std::cerr << "Connecting\n";
         if (connect())
         {
             std::cerr << "Connected\n";
+            _state = State::SendRequest;
             // Now prepare the request.
-            _req = req;
-            _haveNewReq = true;
+            _request = req;
 
             poll.insertNewSocket(_socket);
         }
-
-        std::cerr << "Done\n";
     }
 
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
+        std::cout << "onConnect\n";
         // _socket = socket;
         LOG_TRC('#' << socket->getFD() << " Connected.");
     }
@@ -184,7 +221,7 @@ public:
     {
         std::cout << "getPollEvents\n";
         int events = POLLIN;
-        if (_haveNewReq)
+        if (_state == State::SendRequest)
             events |= POLLOUT;
         return events;
     }
@@ -196,14 +233,15 @@ public:
     void performWrites() override
     {
         std::cout << "performWrites\n";
-        if (_haveNewReq)
+        if (_state == State::SendRequest)
         {
             std::string header = "GET http://www.example.org/pub/WWW/TheProject.html HTTP/1.1\n\n";
             Buffer& out = _socket->getOutBuffer();
             out.append(header.data(), header.size());
             std::cout << "performWrites: " << out.size() << "\n";
+            // TODO: Write body in post requests.
+            _state = State::RecvHeader;
             _socket->writeOutgoingData();
-            _haveNewReq = false;
         }
     }
 
@@ -223,9 +261,10 @@ private:
     const std::string _host;
     const std::string _port;
     const bool _secure;
+    State _state;
     std::shared_ptr<StreamSocket> _socket;
-    HttpRequest _req;
-    bool _haveNewReq;
+    HttpRequest _request;
+    HttpResponse _response;
 };
 
 inline bool HttpSession::connect()

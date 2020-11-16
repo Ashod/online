@@ -51,15 +51,20 @@ void HttpRequestTests::testSimpleGet()
 
     HttpRequest httpRequest;
     httpRequest.setUrl("/");
-    httpRequest.set("Host", "www.example.com");
+    httpRequest.header().set("Host", "www.example.com");
     // httpRequest.set("Connection", "upgrade");
     // httpRequest.set("Upgrade", "upgrade");
 
     auto httpSession = HttpSession::create("example.com", 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
 
-    for (int i = 0; i < 10; ++i)
+    const HttpResponse& httpResponse = httpSession->response();
+
+    while (httpResponse.statusCategory() == HttpResponse::StatusCategory::Informational)
+    {
         sleep(1);
+    }
+
     // pollThread.insertNewSocket(const std::shared_ptr<Socket> &newSocket);
 
     pollThread.joinThread();
