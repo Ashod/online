@@ -20,26 +20,54 @@
 #include "Log.hpp"
 #include "Util.hpp"
 
-namespace Poco
-{
-class MemoryInputStream;
-namespace Net
-{
-class HTTPRequest;
-class HTTPResponse;
-} // namespace Net
-class URI;
-} // namespace Poco
-
 /// An HTTP Header.
 class HttpHeader
 {
 public:
+    static constexpr const char* CONTENT_TYPE = "Content-Type";
+    static constexpr const char* CONTENT_LENGTH = "Content-Length";
+
     /// Set an HTTP header entry.
     void set(const std::string& key, const std::string& value)
     {
         _headers.emplace_back(key, value);
     }
+
+    bool has(const std::string& key) const
+    {
+        for (const auto& pair : _headers)
+        {
+            if (pair.first == key)
+                return true;
+        }
+
+        return false;
+    }
+
+    std::string get(const std::string& key) const
+    {
+        for (const auto& pair : _headers)
+        {
+            if (pair.first == key)
+                return pair.second;
+        }
+
+        return std::string();
+    }
+
+    /// Set the Content-Type header.
+    void setContentType(const std::string& type) { set(CONTENT_TYPE, type); }
+    /// Get the Content-Type header.
+    std::string getContentType() const { return get(CONTENT_TYPE); }
+    /// Returns true iff a Content-Type header exists.
+    bool hasContentType() const { return has(CONTENT_TYPE); }
+
+    /// Set the Content-Length header.
+    void setContentLength(int64_t length) { set(CONTENT_LENGTH, std::to_string(length)); }
+    /// Get the Content-Length header.
+    int64_t getContentLength() const { return std::stoll(get(CONTENT_LENGTH)); }
+    /// Returns true iff a Content-Length header exists.
+    bool hasContentLength() const { return has(CONTENT_LENGTH); }
 
     /// Serialize the header to an output stream.
     template <typename T> T& serialize(T& os) const
@@ -154,10 +182,11 @@ class HttpSession final : public ProtocolHandlerInterface
 public:
     enum class State
     {
-        New,
-        SendRequest, //< Request sending needed or in progress.
+        New, //< A new request.
+        SendHeader, //< Request header sending pending.
+        SendBody, //< Request body sending progress or in progress (for POST only).
         RecvHeader, //< Response header reading in progress.
-        RecvBody, //< Response body reading in progress.
+        RecvBody, //< Response body reading in progress (optional, if a body exists).
         Finished //< A request has been satisfied.
     };
 
@@ -186,7 +215,7 @@ public:
         if (connect())
         {
             std::cerr << "Connected\n";
-            _state = State::SendRequest;
+            _state = State::SendHeader;
             // Now prepare the request.
             _request = req;
 
@@ -253,7 +282,7 @@ public:
     {
         std::cout << "getPollEvents\n";
         int events = POLLIN;
-        if (_state == State::SendRequest)
+        if (_state == State::SendHeader || _state == State::SendBody)
             events |= POLLOUT;
         return events;
     }
@@ -265,7 +294,7 @@ public:
     void performWrites() override
     {
         std::cout << "performWrites\n";
-        if (_state == State::SendRequest)
+        if (_state == State::SendHeader)
         {
             // std::string header = "GET http://www.example.org/pub/WWW/TheProject.html HTTP/1.1\n\n";
             std::ostringstream oss;
