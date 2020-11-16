@@ -41,15 +41,21 @@ public:
         _headers.emplace_back(key, value);
     }
 
+    /// Serialize the header to an output stream.
+    template <typename T> T& serialize(T& os) const
+    {
+        for (const auto& pair : _headers)
+        {
+            os << pair.first << ": " << pair.second << "\r\n";
+        }
+
+        return os;
+    }
+
     std::string toString() const
     {
         std::ostringstream oss;
-        for (const auto& pair : _headers)
-        {
-            oss << pair.first << ": " << pair.second << "\r\n";
-        }
-
-        return oss.str();
+        return serialize(oss).str();
     }
 
 private:
@@ -64,17 +70,46 @@ class HttpRequest final
 public:
     static constexpr const char* VERB_GET = "GET";
     static constexpr const char* VERB_POST = "POST";
+    static constexpr const char* VERS_1_1 = "HTTP/1.1";
 
+    HttpRequest(const std::string& url, const std::string& verb = VERB_GET,
+                const std::string& version = VERS_1_1)
+        : _url(url)
+        , _verb(verb)
+        , _version(version)
+    {
+    }
+
+    /// Create a request to GET the root resource "/".
+    HttpRequest()
+        : HttpRequest("/")
+    {
+    }
+
+    /// Set the request URL.
     void setUrl(const std::string& url) { _url = url; }
+    /// Get the request URL.
     const std::string& getUrl() const { return _url; }
 
+    /// Set the request verb (typically GET or POST).
+    void setVerb(const std::string& verb) { _verb = verb; }
+    /// Get the request verb.
+    const std::string& getVerb() const { return _verb; }
+
+    /// Set the protocol version (typically HTTP/1.1).
+    void setVersion(const std::string& version) { _version = version; }
+    /// Get the protocol version.
+    const std::string& getVersion() const { return _version; }
+
+    /// The header object to populate.
     HttpHeader& header() { return _header; }
 
 private:
     std::string _startLine;
     HttpHeader _header;
-    /// The URL to request.
-    std::string _url;
+    std::string _url; //< The URL to request.
+    std::string _verb; //< The verb of the request.
+    std::string _version; //< The protocol version of the request.
 };
 
 class HttpResponse final
@@ -232,7 +267,14 @@ public:
         std::cout << "performWrites\n";
         if (_state == State::SendRequest)
         {
-            std::string header = "GET http://www.example.org/pub/WWW/TheProject.html HTTP/1.1\n\n";
+            // std::string header = "GET http://www.example.org/pub/WWW/TheProject.html HTTP/1.1\n\n";
+            std::ostringstream oss;
+            oss << _request.getVerb() << ' ' << _request.getUrl() << ' ' << _request.getVersion()
+                << "\r\n";
+            _request.header().serialize(oss);
+            oss << "\r\n";
+            const std::string header = oss.str();
+
             Buffer& out = _socket->getOutBuffer();
             out.append(header.data(), header.size());
             std::cout << "performWrites: " << out.size() << "\n";
