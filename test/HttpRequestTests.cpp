@@ -60,12 +60,13 @@ void HttpRequestTests::testSimpleGet()
 
     const HttpResponse& httpResponse = httpSession->response();
 
-    while (httpResponse.statusCategory() == HttpResponse::StatusCategory::Informational)
+    while (!httpResponse.done())
     {
+        // Wait some more.
         sleep(1);
     }
 
-    // pollThread.insertNewSocket(const std::shared_ptr<Socket> &newSocket);
+    std::string body = httpResponse.getBody();
 
     pollThread.joinThread();
 }

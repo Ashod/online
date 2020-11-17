@@ -414,6 +414,24 @@ namespace Util
         return false;
     }
 
+    /// Return true iff s starts with t.
+    // inline bool startsWith(const char* s, const char* t)
+    // {
+    //     if (s == nullptr || *s != '\0' || t == nullptr || *t != '\0')
+    //         return false; // They aren't even valid to be equivalent.
+
+    //     while (*s++ == *t++)
+    //     {
+    //         if (*t == '\0')
+    //             return true; // Matched all of t.
+
+    //         if (*s == '\0')
+    //             return false; // Ran out but t has more: no match.
+    //     }
+
+    //     return false; // Mismatched a character.
+    // }
+
     /// Tokenize delimited values until we hit new-line or the end.
     inline void tokenize(const char* data, const std::size_t size, const char delimiter,
                          std::vector<StringToken>& tokens)

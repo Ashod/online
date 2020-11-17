@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include <bits/stdint-intn.h>
+#include <cctype>
 #include <sstream>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -20,6 +22,16 @@
 #include "Log.hpp"
 #include "Util.hpp"
 
+/// The parse-state of a field.
+enum class FieldParseState
+{
+    Unknown, //< Not yet parsed.
+    Incomplete, //< Not enough data to parse this field. Need more data.
+    Invalid, //< The field is invalid/unexpected/long.
+    Complete, //< The field is complete. Doesn't imply it's valid.
+    Valid //< The field is both complete and valid.
+};
+
 /// An HTTP Header.
 class HttpHeader
 {
@@ -27,7 +39,52 @@ public:
     static constexpr const char* CONTENT_TYPE = "Content-Type";
     static constexpr const char* CONTENT_LENGTH = "Content-Length";
 
-    /// Set an HTTP header entry.
+    static constexpr int64_t MaxNumberFields = 128; // Arbitrary large number.
+    static constexpr int64_t MaxNameLen = 512;
+    static constexpr int64_t MaxValueLen = 9 * 1024; // 8000 bytes recommended by rfc.
+    static constexpr int64_t MaxFieldLen = MaxNameLen + MaxValueLen;
+    static constexpr int64_t MaxHeaderLen = MaxNumberFields * MaxFieldLen; // ~1.18 MB.
+
+    /// Describes the header state during parsing.
+    enum class State
+    {
+        New,
+        Incomplete, //< Haven't reached the end yet.
+        InvalidField, //< Too long, no colon, etc.
+        TooManyFields, //< Too many fields to accept.
+        Complete //< Header is complete and valid.
+    };
+
+    // HttpHeader()
+    //     : _isComplete(true)
+    // {
+    // }
+
+    using Container = std::vector<std::pair<std::string, std::string>>;
+    using ConstIterator = std::vector<std::pair<std::string, std::string>>::const_iterator;
+
+    ConstIterator begin() const { return _headers.begin(); }
+    ConstIterator end() const { return _headers.end(); }
+
+    // bool isComplete() const { return _isComplete; }
+
+    /// Scans the given data to evaluate its validity as a header.
+    // static State validate(const char* p, int64_t len)
+    // {
+    //     int64_t curFieldLen = 0;
+    //     for (int64_t i = 0; i < len; ++i)
+    //     {
+    //     }
+    // }
+
+    // static HttpHeader parse(const char* p, int64_t len)
+    // {
+    //     HttpHeader hdr;
+
+    //     return hdr;
+    // }
+
+    /// Set an HTTP header field.
     void set(const std::string& key, const std::string& value)
     {
         _headers.emplace_back(key, value);
@@ -89,15 +146,18 @@ public:
 private:
     /// The headers are ordered key/value pairs.
     /// This isn't designed for lookup performance, but to preserve order.
-    std::vector<std::pair<std::string, std::string>> _headers;
+    //TODO: We might not need this and get away with a map.
+    Container _headers;
+    /// When parsing, we set this to mark whether we got a full header or not.
+    // bool _isComplete;
 };
 
 /// An HTTP Request made over HttpSession.
 class HttpRequest final
 {
 public:
-// HEAD request?
-// Nov 03 18:12:30 zeuxo loolwsd[1229]: wsd-01229-01284 2020-11-03 17:12:30.901072 [ websrv_poll ] INF  #35: Client HTTP Request: HEAD / HTTP/1.1 / Host: 127.0.0.1:9980 / User-Agent: Zabbix 4.0.4 / Accept: */*| net/Socket.cpp:843
+    // HEAD request?
+    // Nov 03 18:12:30 zeuxo loolwsd[1229]: wsd-01229-01284 2020-11-03 17:12:30.901072 [ websrv_poll ] INF  #35: Client HTTP Request: HEAD / HTTP/1.1 / Host: 127.0.0.1:9980 / User-Agent: Zabbix 4.0.4 / Accept: */*| net/Socket.cpp:843
     static constexpr const char* VERB_GET = "GET";
     static constexpr const char* VERB_POST = "POST";
     static constexpr const char* VERS_1_1 = "HTTP/1.1";
@@ -142,15 +202,136 @@ private:
     std::string _version; //< The protocol version of the request.
 };
 
+/// HTTP Status Line is the first line of a response sent by a server.
+class StatusLine
+{
+public:
+    static constexpr int64_t VersionLen = 8;
+    static constexpr int64_t StatusCodeLen = 3;
+    static constexpr int64_t MaxReasonPhraseLen = 512; // Arbitrary large number.
+    static constexpr int64_t MinStatusLineLen = sizeof("HTTP/0.0 000 X\r\n");
+    static constexpr int64_t MaxStatusLineLen = VersionLen + StatusCodeLen + MaxReasonPhraseLen;
+    static constexpr int64_t MinValidStatusCode = 100;
+    static constexpr int64_t MaxValidStatusCode = 599;
+
+    StatusLine(const std::string& version, int code, const std::string& reason)
+        : _httpVersion(version)
+        , _statusCode(code)
+        , _reasonPhrase(reason)
+    {
+    }
+
+    /// Skips over space and tab characters starting at off.
+    /// Returns the offset of the first match, otherwise, len.
+    int64_t skipSpaceAndTab(const char* p, int64_t off, int64_t len)
+    {
+        for (; off < len; ++off)
+        {
+            if (p[off] != ' ' && p[off] != '\t')
+                return off;
+        }
+
+        return len;
+    }
+
+    FieldParseState parse(const char* p, int64_t len)
+    {
+        // First line is the status line.
+        if (p == nullptr || len < MinStatusLineLen)
+            return FieldParseState::Incomplete;
+
+        int64_t off = skipSpaceAndTab(p, 0, len);
+        if (off >= MaxStatusLineLen)
+            return FieldParseState::Invalid;
+
+        // We still expect the minimum amount of data.
+        if ((len - off) < MinStatusLineLen)
+            return FieldParseState::Incomplete;
+
+        // We should have the version now.
+        assert(off + VersionLen < len && "Expected to have more data.");
+        const char* version = &p[off];
+        constexpr int VersionMajPos = sizeof("HTTP/");
+        constexpr int VersionDotPos = VersionMajPos + 1;
+        constexpr int VersionMinPos = VersionDotPos + 1;
+        const int versionMajor = version[VersionMajPos] - '0';
+        const int versionMinor = version[VersionMinPos] - '0';
+        if (!Util::startsWith(version, "HTTP/") || (versionMajor < 0 || versionMajor > 9)
+            || version[VersionDotPos] != '.' || (versionMinor < 0 || versionMinor > 9))
+        {
+            return FieldParseState::Invalid;
+        }
+
+        _httpVersion = std::string(version, VersionLen);
+        _versionMajor = versionMajor;
+        _versionMinor = versionMinor;
+
+        // Find the Status Code.
+        off = skipSpaceAndTab(p, off + VersionLen, len);
+        if (off >= MaxStatusLineLen)
+            return FieldParseState::Invalid;
+
+        // We still expect the Status Code and CRLF.
+        if ((len - off) < (MinStatusLineLen - VersionLen))
+            return FieldParseState::Incomplete;
+
+        // Read the Status Code now.
+        assert(off + StatusCodeLen < len && "Expected to have more data.");
+        _statusCode = std::atoi(&p[off]);
+        if (_statusCode < MinValidStatusCode || _statusCode > MaxValidStatusCode)
+            return FieldParseState::Invalid;
+
+        // Find the Reason Phrase.
+        off = skipSpaceAndTab(p, off + StatusCodeLen, len);
+        if (off >= MaxStatusLineLen)
+            return FieldParseState::Invalid;
+
+        const char* reason = &p[off];
+
+        // Find the line break, which ends the status line.
+        for (; off < len; ++off)
+        {
+            if (p[off] == '\n')
+                break;
+
+            if (len >= MaxStatusLineLen)
+                return FieldParseState::Invalid;
+        }
+
+        if (off >= len)
+            return FieldParseState::Incomplete;
+
+        _reasonPhrase = std::string(reason, off);
+
+        return FieldParseState::Valid;
+    }
+
+    const std::string& httpVersion() const { return _httpVersion; }
+    int versionMajor() const { return _versionMajor; }
+    int versionMinor() const { return _versionMinor; }
+    int statusCode() const { return _statusCode; }
+    const std::string& reasonPhrase() const { return _reasonPhrase; }
+
+private:
+    std::string _httpVersion; //< Typically "HTTP/1.1"
+    int _versionMajor; //< The first version digit (typically 1).
+    int _versionMinor; //< The second version digit (typically 1).
+    int _statusCode;
+    std::string _reasonPhrase; //< A client SHOULD ignore the reason-phrase content.
+};
+
 class HttpResponse final
 {
 public:
     HttpResponse()
-        : _statusCategory(StatusCategory::Informational)
+        : _statusCategory(StatusCodeClass::Informational)
+        , _state(State::New)
     {
     }
 
-    enum class StatusCategory
+    /// The Status Code class of the response.
+    /// None of these implies complete receipt of the response.
+    enum class StatusCodeClass
     {
         Informational, //< Request being processed, not final response.
         Successful, //< Successfully processed request, response on the way.
@@ -159,14 +340,56 @@ public:
         Server_Error //< Bad server, cannot respond.
     };
 
-    StatusCategory statusCategory() const { return _statusCategory; }
+    StatusCodeClass statusCategory() const { return _statusCategory; }
+
+    /// The state of the response.
+    enum class State
+    {
+        New, //< Valid but meaningless.
+        Incomplete, //< In progress, no errors.
+        Error, //< This is for protocol errors, not 400 and 500 reponses.
+        Complete //< Successfully completed.
+    };
+
+    /// Signifies that the response is
+    State state() const { return _state; }
+
+    /// Returns true iff there is no more data to expect.
+    bool done() const { return (_state == State::Error || _state == State::Complete); }
 
     const HttpHeader& header() const { return _header; }
     HttpHeader& header() { return _header; }
 
+    ///
+    std::string getBody() const
+    {
+        // TODO: Check and throw.
+        return std::string();
+    }
+
+    // /// Returns the position where '\n' is found, otherwise -1.
+    // static int64_t seekLineBreak(const char* p, int64_t len, int64_t lim)
+    // {
+    //     lim = std::min(len, lim);
+    //     for (int64_t i = 0; i < lim; ++i)
+    //     {
+    //         if (p[i] == '\n')
+    //             return i;
+    //     }
+
+    //     return -1;
+    // }
+
+    // static HttpHeader::State validate(const char* p, int64_t len)
+    // {
+    //     // Validate the header.
+    //     return HttpHeader::validate(p + i, len - i);
+    // }
+
 private:
     HttpHeader _header;
-    StatusCategory _statusCategory;
+    StatusCodeClass _statusCategory;
+    State _state;
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -253,30 +476,11 @@ public:
     virtual void handleIncomingMessage(SocketDisposition&) override
     {
         std::cout << "handleIncomingMessage\n";
+
+        // _response = HttpResponse();
+        // StatusLine statusLine
         std::string res(_socket->getInBuffer().data(), _socket->getInBuffer().size());
         std::cout << res;
-
-        //         std::shared_ptr<StreamSocket> socket = _socket.lock();
-
-        // #if MOBILEAPP
-        //         // No separate "upgrade" is going on
-        //         if (socket && !socket->isWebSocket())
-        //             socket->setWebSocket();
-        // #endif
-
-        //         if (!socket)
-        //         {
-        //             LOG_ERR("No socket associated with WebSocketHandler " << this);
-        //         }
-        // #if !MOBILEAPP
-        //         else if (_isClient && !socket->isWebSocket())
-        //             handleClientUpgrade(socket);
-        // #endif
-        //         else
-        //         {
-        //             while (socket->processInputEnabled() && handleTCPStream(socket))
-        //                 ; // might have multiple messages in the accumulated buffer.
-        //         }
     }
 
     int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
@@ -292,13 +496,11 @@ public:
     /// Do we need to handle a timeout ?
     void checkTimeout(std::chrono::steady_clock::time_point) override {}
 
-public:
     void performWrites() override
     {
         std::cout << "performWrites\n";
         if (_state == State::SendHeader)
         {
-            // std::string header = "GET http://www.example.org/pub/WWW/TheProject.html HTTP/1.1\n\n";
             std::ostringstream oss;
             oss << _request.getVerb() << ' ' << _request.getUrl() << ' ' << _request.getVersion()
                 << "\r\n";
@@ -320,6 +522,9 @@ public:
     bool connect();
 
 private:
+    // bool hasBody() const { return }
+    // int64_t getBodySize() const {}
+
     int sendTextMessage(const char*, const size_t, bool) const override { return 0; }
 
     int sendBinaryMessage(const char*, const size_t, bool) const override { return 0; }
