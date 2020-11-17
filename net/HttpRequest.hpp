@@ -96,6 +96,8 @@ private:
 class HttpRequest final
 {
 public:
+// HEAD request?
+// Nov 03 18:12:30 zeuxo loolwsd[1229]: wsd-01229-01284 2020-11-03 17:12:30.901072 [ websrv_poll ] INF  #35: Client HTTP Request: HEAD / HTTP/1.1 / Host: 127.0.0.1:9980 / User-Agent: Zabbix 4.0.4 / Accept: */*| net/Socket.cpp:843
     static constexpr const char* VERB_GET = "GET";
     static constexpr const char* VERB_POST = "POST";
     static constexpr const char* VERS_1_1 = "HTTP/1.1";
