@@ -12,6 +12,7 @@
 #include <Poco/Net/HTTPResponse.h>
 #include <Poco/StreamCopier.h>
 
+#include <string>
 #include <test/lokassert.hpp>
 
 #include <net/HttpRequest.hpp>
@@ -30,10 +31,14 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
     void testSimpleGet();
     void testGetStatus();
 };
+
 void HttpRequestTests::testSimpleGet()
 {
-    Poco::Net::HTTPClientSession session("example.com", 80);
-    Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, "/",
+    const char* Host = "www.example.com";
+    const char* URL = "/";
+
+    Poco::Net::HTTPClientSession session(Host, 80);
+    Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, URL,
                                    Poco::Net::HTTPMessage::HTTP_1_1);
     session.sendRequest(request);
     Poco::Net::HTTPResponse response;
@@ -43,30 +48,34 @@ void HttpRequestTests::testSimpleGet()
     std::ostringstream outputStringStream;
     Poco::StreamCopier::copyStream(rs, outputStringStream);
     std::string responseString = outputStringStream.str();
-    // std::cout << responseString << std::endl;
+    std::cout << responseString << std::endl;
+    std::cout << "-----" << std::endl;
 
     // Start the polling thread.
     SocketPoll pollThread("HttpRequestPoll");
     pollThread.startThread();
 
     HttpRequest httpRequest;
-    httpRequest.setUrl("/");
-    httpRequest.header().set("Host", "www.example.com");
-    // httpRequest.set("Connection", "upgrade");
-    // httpRequest.set("Upgrade", "upgrade");
+    httpRequest.setUrl(URL);
+    httpRequest.header().set("Host", Host);
 
-    auto httpSession = HttpSession::create("example.com", 80, false);
+    auto httpSession = HttpSession::create(Host, 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
 
     const HttpResponse& httpResponse = httpSession->response();
 
-    while (!httpResponse.done())
-    {
-        // Wait some more.
-        usleep(100);
-    }
+    for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
+        usleep(100); // Wait some more.
+
+    LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
+    LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
+    LOK_ASSERT(httpResponse.statusLine().statusCategory()
+               == StatusLine::StatusCodeClass::Successful);
 
     const std::string body = httpResponse.getBody();
+    LOK_ASSERT(!httpResponse.getBody().empty());
 
     LOK_ASSERT_EQUAL(responseString, body);
 
@@ -80,27 +89,36 @@ void HttpRequestTests::testGetStatus()
     pollThread.startThread();
 
     HttpRequest httpRequest;
-    httpRequest.setUrl("/status/200");
     httpRequest.header().set("Host", "httpbin.org");
-    // httpRequest.set("Connection", "upgrade");
-    // httpRequest.set("Upgrade", "upgrade");
-    auto httpSession = HttpSession::create("httpbin.org", 80, false);
-    httpSession->asyncGet(httpRequest, pollThread);
 
+    auto httpSession = HttpSession::create("httpbin.org", 80, false);
     const HttpResponse& httpResponse = httpSession->response();
 
-    while (!httpResponse.done())
+    StatusLine::StatusCodeClass statusCodeClasses[]
+        = { StatusLine::StatusCodeClass::Informational, StatusLine::StatusCodeClass::Successful,
+            StatusLine::StatusCodeClass::Redirection, StatusLine::StatusCodeClass::Client_Error,
+            StatusLine::StatusCodeClass::Server_Error };
+    int curStatusCodeClass = -1;
+    for (int statusCode = 100; statusCode < 600; ++statusCode)
     {
-        // Wait some more.
-        usleep(100);
+        httpRequest.setUrl("/status/" + std::to_string(statusCode));
+        httpSession->asyncGet(httpRequest, pollThread);
+
+        for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
+            usleep(100); // Wait some more.
+
+        LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+        LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
+        LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
+        LOK_ASSERT(httpResponse.statusLine().statusCode() == statusCode);
+
+        if (statusCode % 100 == 0)
+            ++curStatusCodeClass;
+        LOK_ASSERT(httpResponse.statusLine().statusCategory()
+                   == statusCodeClasses[curStatusCodeClass]);
+
+        LOK_ASSERT(httpResponse.getBody().empty());
     }
-
-    // LOK_ASSERT(httpResponse.statusCategory() == HttpResponse::StatusCodeClass::Successful);
-    LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
-
-    const std::string body = httpResponse.getBody();
-    std::cout << body << std::endl;
-
     pollThread.joinThread();
 }
 

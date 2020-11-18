@@ -87,7 +87,8 @@ public:
 
             Poco::Net::HTTPResponse response;
             response.read(data);
-            setContentLength(response.getContentLength());
+            if (response.hasContentLength())
+                setContentLength(response.getContentLength());
             setContentType(response.getContentType());
             std::cerr << "Read " << data.tellg() << " bytes of header:" << std::endl;
             std::cerr << std::string(p, data.tellg()) << std::endl;
@@ -242,6 +243,33 @@ public:
     {
     }
 
+    /// The Status Code class of the response.
+    /// None of these implies complete receipt of the response.
+    enum class StatusCodeClass
+    {
+        Invalid,
+        Informational, //< Request being processed, not final response.
+        Successful, //< Successfully processed request, response on the way.
+        Redirection, //< Redirected to a different resource.
+        Client_Error, //< Bad request, cannot respond.
+        Server_Error //< Bad server, cannot respond.
+    };
+
+    StatusCodeClass statusCategory() const
+    {
+        if (_statusCode >= 500 && _statusCode < 600)
+            return StatusCodeClass::Server_Error;
+        if (_statusCode >= 400)
+            return StatusCodeClass::Client_Error;
+        if (_statusCode >= 300)
+            return StatusCodeClass::Redirection;
+        if (_statusCode >= 200)
+            return StatusCodeClass::Successful;
+        if (_statusCode >= 100)
+            return StatusCodeClass::Informational;
+        return StatusCodeClass::Invalid;
+    }
+
     /// Skips over space and tab characters starting at off.
     /// Returns the offset of the first match, otherwise, len.
     int64_t skipSpaceAndTab(const char* p, int64_t off, int64_t len)
@@ -353,8 +381,7 @@ public:
     using OnBodyReceipt = std::function<int64_t(const char* p, int64_t len)>;
 
     HttpResponse()
-        : _statusCategory(StatusCodeClass::Informational)
-        , _state(State::New)
+        : _state(State::New)
         , _stage(Stage::StatusLine)
         , _recvBodySize(0)
         , _bodyHandling(BodyHandling::InMemory)
@@ -362,22 +389,20 @@ public:
         // By default we store the body in memory.
         _bodyReceiptCb = [this](const char* p, int64_t len) {
             _body.insert(_body.end(), p, p + len);
+            std::cerr << "Body: " << len << "\n" << _body << std::endl;
             return len;
         };
     }
 
-    /// The Status Code class of the response.
-    /// None of these implies complete receipt of the response.
-    enum class StatusCodeClass
+    void reset()
     {
-        Informational, //< Request being processed, not final response.
-        Successful, //< Successfully processed request, response on the way.
-        Redirection, //< Redirected to a different resource.
-        Client_Error, //< Bad request, cannot respond.
-        Server_Error //< Bad server, cannot respond.
-    };
-
-    StatusCodeClass statusCategory() const { return _statusCategory; }
+        _state = State::New;
+        _stage = Stage::StatusLine;
+        _recvBodySize = 0;
+        _body.clear();
+        _statusLine = StatusLine();
+        _header = HttpHeader();
+    }
 
     /// The state of the response.
     enum class State
@@ -393,6 +418,8 @@ public:
 
     /// Returns true iff there is no more data to expect.
     bool done() const { return (_state == State::Error || _state == State::Complete); }
+
+    const StatusLine& statusLine() const { return _statusLine; }
 
     const HttpHeader& header() const { return _header; }
     HttpHeader& header() { return _header; }
@@ -462,28 +489,28 @@ public:
         int64_t available = data.size();
         if (_stage == Stage::StatusLine)
         {
-            _stage = Stage::Header;
-            // int64_t read = available;
-            // switch (_statusLine.parse(p, read))
-            // {
-            //     case FieldParseState::Unknown:
-            //     case FieldParseState::Complete:
-            //     case FieldParseState::Incomplete:
-            //         return 0;
-            //     case FieldParseState::Invalid:
-            //         _state = State::Error;
-            //         return -1;
-            //     case FieldParseState::Valid:
-            //         if (read <= 0)
-            //             return read; // Unexpected, really.
-            //         if (read > 0)
-            //         {
-            //             available -= read;
-            //             p += read;
-            //             _stage = Stage::Header;
-            //         }
-            //         break;
-            // }
+            int64_t read = available;
+            switch (_statusLine.parse(p, read))
+            {
+                case FieldParseState::Unknown:
+                case FieldParseState::Complete:
+                case FieldParseState::Incomplete:
+                    return 0;
+                case FieldParseState::Invalid:
+                    _state = State::Error;
+                    return -1;
+                case FieldParseState::Valid:
+                    if (read <= 0)
+                        return read; // Unexpected, really.
+                    if (read > 0)
+                    {
+                        //FIXME: Don't consume what we read until we have our header parser.
+                        // available -= read;
+                        // p += read;
+                        _stage = Stage::Header;
+                    }
+                    break;
+            }
         }
 
         if (_stage == Stage::Header)
@@ -500,17 +527,33 @@ public:
                 available -= read;
                 p += read;
 
-                if (_header.hasContentLength() && _header.getContentLength() == 0)
+                if (_header.hasContentLength())
+                {
+                    if (_header.getContentLength() > 0)
+                        _stage = Stage::Body;
+                    else if (_header.getContentLength() == 0)
+                        _stage = Stage::Finished; // No body, we are done.
+                    else if (_header.getContentLength() < 0)
+                    {
+                        _state = State::Error;
+                        _stage = Stage::Finished;
+                    }
+                }
+
+                if (_statusLine.statusCategory() == StatusLine::StatusCodeClass::Informational
+                    || _statusLine.statusCode() == 204 /*No Content*/
+                    || _statusLine.statusCode() == 304 /*Not Modified*/) // || HEAD request
+                // || 2xx on CONNECT request
+                {
                     _stage = Stage::Finished; // No body, we are done.
-                else
-                    _stage = Stage::Body;
+                }
             }
         }
 
         if (_stage == Stage::Body)
         {
-            // std::cerr << "Stage::Body: " << available << "\n"
-            //           << std::string(p, available) << std::endl;
+            std::cerr << "Stage::Body: " << available << "\n"
+                      << std::string(p, available) << std::endl;
             const int64_t read = _bodyReceiptCb(p, available);
             if (read < 0)
             {
@@ -531,6 +574,7 @@ public:
 
         if (_stage == Stage::Finished)
         {
+            std::cerr << "State::Complete\n";
             _state = State::Complete;
         }
 
@@ -549,7 +593,6 @@ private:
 
     StatusLine _statusLine;
     HttpHeader _header;
-    StatusCodeClass _statusCategory;
     State _state;
     Stage _stage;
     int64_t _recvBodySize;
@@ -568,6 +611,7 @@ class HttpSession final : public ProtocolHandlerInterface
         , _port(port)
         , _secure(secure)
         , _state(State::New)
+        , _connected(false)
     {
     }
 
@@ -603,23 +647,25 @@ public:
 
     void asyncGet(const HttpRequest& req, SocketPoll& poll)
     {
-        std::cerr << "Connecting\n";
-        if (connect())
+        std::cerr << "asyncGet\n";
+        _response.reset();
+        _request = req;
+        _state = State::SendHeader; // Once we reset the state, we can get data.
+
+        if (!_connected && connect())
         {
             std::cerr << "Connected\n";
-            _state = State::SendHeader;
-            // Now prepare the request.
-            _request = req;
-
             poll.insertNewSocket(_socket);
         }
+        else
+            poll.wakeupWorld();
     }
 
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
         std::cout << "onConnect\n";
-        // _socket = socket;
         LOG_TRC('#' << socket->getFD() << " Connected.");
+        _connected = true;
     }
 
     void shutdown(bool /*goingAway*/, const std::string& /*statusMessage*/) override
@@ -630,14 +676,7 @@ public:
     void getIOStats(uint64_t& sent, uint64_t& recv) override
     {
         std::cout << "getIOStats\n";
-        // std::shared_ptr<StreamSocket> socket = getSocket().lock();
-        // if (socket)
-        //     socket->getIOStats(sent, recv);
-        // else
-        {
-            sent = 0;
-            recv = 0;
-        }
+        _socket->getIOStats(sent, recv);
     }
 
     virtual void handleIncomingMessage(SocketDisposition&) override
@@ -667,9 +706,6 @@ public:
         return events;
     }
 
-    /// Do we need to handle a timeout ?
-    void checkTimeout(std::chrono::steady_clock::time_point) override {}
-
     void performWrites() override
     {
         std::cout << "performWrites\n";
@@ -691,16 +727,18 @@ public:
         }
     }
 
-    void onDisconnect() override { std::cout << "onDisconnect\n"; }
+    void onDisconnect() override
+    {
+        std::cout << "onDisconnect\n";
+        _connected = false;
+    }
 
     bool connect();
 
 private:
-    // bool hasBody() const { return }
-    // int64_t getBodySize() const {}
-
+    /// Do we need to handle a timeout ?
+    void checkTimeout(std::chrono::steady_clock::time_point) override {}
     int sendTextMessage(const char*, const size_t, bool) const override { return 0; }
-
     int sendBinaryMessage(const char*, const size_t, bool) const override { return 0; }
 
 private:
@@ -711,6 +749,7 @@ private:
     std::shared_ptr<StreamSocket> _socket;
     HttpRequest _request;
     HttpResponse _response;
+    bool _connected;
 };
 
 inline bool HttpSession::connect()
