@@ -374,7 +374,7 @@ public:
     /// The callback signature for handling body data.
     /// Receives a vector with the data, returns the number of bytes consumed.
     /// Returning -1 will terminate the connection.
-    using OnBodyReceipt = std::function<int64_t(const char* p, int64_t len)>;
+    using OnData = std::function<int64_t(const char* p, int64_t len)>;
 
     HttpResponse()
         : _state(State::New)
@@ -417,21 +417,18 @@ public:
     void saveBodyToFile(const std::string& path)
     {
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
-        _bodyReceiptCb = [this](const char* p, int64_t len) {
+        _onDataCb = [this](const char* p, int64_t len) {
             if (_bodyFile.good())
                 _bodyFile.write(p, len);
             return _bodyFile.good() ? len : -1;
         };
     }
 
-    void setOnBodyReceiptHandler(OnBodyReceipt bodyReceiptCb)
-    {
-        _bodyReceiptCb = std::move(bodyReceiptCb);
-    }
+    void setOnBodyReceiptHandler(OnData onDataCb) { _onDataCb = std::move(onDataCb); }
 
     void saveBodyToMemory()
     {
-        _bodyReceiptCb = [this](const char* p, int64_t len) {
+        _onDataCb = [this](const char* p, int64_t len) {
             _body.insert(_body.end(), p, p + len);
             // std::cerr << "Body: " << len << "\n" << _body << std::endl;
             return len;
@@ -444,13 +441,12 @@ public:
     /// Handles incoming data.
     /// Returns the number of bytes consumed, or -1 for error
     /// and/or to interrupt transmission.
-    int64_t handleData(const std::vector<char>& data)
+    int64_t readData(const char* p, int64_t len)
     {
         // We got some data.
         _state = State::Incomplete;
 
-        const char* p = data.data();
-        int64_t available = data.size();
+        int64_t available = len;
         if (_parserStage == ParserStage::StatusLine)
         {
             int64_t read = available;
@@ -518,7 +514,7 @@ public:
         {
             std::cerr << "ParserStage::Body: " << available << "\n"
                       << std::string(p, available) << std::endl;
-            const int64_t read = _bodyReceiptCb(p, available);
+            const int64_t read = _onDataCb(p, available);
             if (read < 0)
             {
                 _state = State::Error;
@@ -541,7 +537,7 @@ public:
             finish();
         }
 
-        return data.size() - available;
+        return len - available;
     }
 
     /// Signifies that we got all the data we expected
@@ -570,7 +566,7 @@ private:
     int64_t _recvBodySize; //< The amount of data we received (compared to the Content-Length).
     std::string _body; //< Used when _bodyHandling is InMemory.
     std::ofstream _bodyFile; //< Used when _bodyHandling is OnDisk.
-    OnBodyReceipt _bodyReceiptCb; //< Used to handling body receipt in all cases.
+    OnData _onDataCb; //< Used to handling body receipt in all cases.
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -653,7 +649,7 @@ public:
         std::cout << "handleIncomingMessage\n";
 
         std::vector<char>& data = _socket->getInBuffer();
-        const int64_t read = _response.handleData(data);
+        const int64_t read = _response.readData(data.data(), data.size());
         if (read > 0)
         {
             // Remove consumed data.
