@@ -57,27 +57,11 @@ public:
         Complete //< Header is complete and valid.
     };
 
-    // HttpHeader()
-    //     : _isComplete(true)
-    // {
-    // }
-
     using Container = std::vector<std::pair<std::string, std::string>>;
     using ConstIterator = std::vector<std::pair<std::string, std::string>>::const_iterator;
 
     ConstIterator begin() const { return _headers.begin(); }
     ConstIterator end() const { return _headers.end(); }
-
-    // bool isComplete() const { return _isComplete; }
-
-    /// Scans the given data to evaluate its validity as a header.
-    // static State validate(const char* p, int64_t len)
-    // {
-    //     int64_t curFieldLen = 0;
-    //     for (int64_t i = 0; i < len; ++i)
-    //     {
-    //     }
-    // }
 
     int64_t parse(const char* p, int64_t len)
     {
@@ -166,31 +150,21 @@ private:
     /// This isn't designed for lookup performance, but to preserve order.
     //TODO: We might not need this and get away with a map.
     Container _headers;
-    /// When parsing, we set this to mark whether we got a full header or not.
-    // bool _isComplete;
 };
 
 /// An HTTP Request made over HttpSession.
 class HttpRequest final
 {
 public:
-    // HEAD request?
-    // Nov 03 18:12:30 zeuxo loolwsd[1229]: wsd-01229-01284 2020-11-03 17:12:30.901072 [ websrv_poll ] INF  #35: Client HTTP Request: HEAD / HTTP/1.1 / Host: 127.0.0.1:9980 / User-Agent: Zabbix 4.0.4 / Accept: */*| net/Socket.cpp:843
     static constexpr const char* VERB_GET = "GET";
     static constexpr const char* VERB_POST = "POST";
     static constexpr const char* VERS_1_1 = "HTTP/1.1";
 
-    HttpRequest(const std::string& url, const std::string& verb = VERB_GET,
+    HttpRequest(const std::string& url = "/", const std::string& verb = VERB_GET,
                 const std::string& version = VERS_1_1)
         : _url(url)
         , _verb(verb)
         , _version(version)
-    {
-    }
-
-    /// Create a request to GET the root resource "/".
-    HttpRequest()
-        : HttpRequest("/")
     {
     }
 
@@ -213,7 +187,6 @@ public:
     HttpHeader& header() { return _header; }
 
 private:
-    std::string _startLine;
     HttpHeader _header;
     std::string _url; //< The URL to request.
     std::string _verb; //< The verb of the request.
@@ -389,22 +362,17 @@ public:
 
     HttpResponse()
         : _state(State::New)
-        , _stage(Stage::StatusLine)
+        , _parserStage(ParserStage::StatusLine)
         , _recvBodySize(0)
-        , _bodyHandling(BodyHandling::InMemory)
     {
         // By default we store the body in memory.
-        _bodyReceiptCb = [this](const char* p, int64_t len) {
-            _body.insert(_body.end(), p, p + len);
-            std::cerr << "Body: " << len << "\n" << _body << std::endl;
-            return len;
-        };
+        saveBodyToMemory();
     }
 
     void reset()
     {
         _state = State::New;
-        _stage = Stage::StatusLine;
+        _parserStage = ParserStage::StatusLine;
         _recvBodySize = 0;
         _body.clear();
         _statusLine = StatusLine();
@@ -429,60 +397,33 @@ public:
     const StatusLine& statusLine() const { return _statusLine; }
 
     const HttpHeader& header() const { return _header; }
-    HttpHeader& header() { return _header; }
 
-    enum class BodyHandling
+    void saveBodyToFile(const std::string& path)
     {
-        InMemory, //< The response body is stored in memory, read by getBody().
-        OnDisk, //< The response body is stored on disk to a given path.
-        Callback //< The body is passed to the client by a callback.
-    };
-
-    bool saveBodyToFile(const std::string& path)
-    {
-        if (_bodyHandling != BodyHandling::InMemory)
-            return false;
-
-        _bodyHandling = BodyHandling::OnDisk;
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
         _bodyReceiptCb = [this](const char* p, int64_t len) {
-            _bodyFile.write(p, len);
+            if (_bodyFile.good())
+                _bodyFile.write(p, len);
             return _bodyFile.good() ? len : -1;
         };
-        return true;
     }
 
-    bool setOnBodyReceiptHandler(OnBodyReceipt bodyReceiptCb)
+    void setOnBodyReceiptHandler(OnBodyReceipt bodyReceiptCb)
     {
-        if (_bodyHandling != BodyHandling::InMemory)
-            return false;
-
-        _bodyHandling = BodyHandling::Callback;
         _bodyReceiptCb = std::move(bodyReceiptCb);
-        return true;
+    }
+
+    void saveBodyToMemory()
+    {
+        _bodyReceiptCb = [this](const char* p, int64_t len) {
+            _body.insert(_body.end(), p, p + len);
+            // std::cerr << "Body: " << len << "\n" << _body << std::endl;
+            return len;
+        };
     }
 
     /// Returns the body, assuming it wasn't redirected to file or callback.
     std::string getBody() const { return _body; }
-
-    // /// Returns the position where '\n' is found, otherwise -1.
-    // static int64_t seekLineBreak(const char* p, int64_t len, int64_t lim)
-    // {
-    //     lim = std::min(len, lim);
-    //     for (int64_t i = 0; i < lim; ++i)
-    //     {
-    //         if (p[i] == '\n')
-    //             return i;
-    //     }
-
-    //     return -1;
-    // }
-
-    // static HttpHeader::State validate(const char* p, int64_t len)
-    // {
-    //     // Validate the header.
-    //     return HttpHeader::validate(p + i, len - i);
-    // }
 
     /// Handles incoming data.
     /// Returns the number of bytes consumed, or -1 for error
@@ -494,7 +435,7 @@ public:
 
         const char* p = data.data();
         int64_t available = data.size();
-        if (_stage == Stage::StatusLine)
+        if (_parserStage == ParserStage::StatusLine)
         {
             int64_t read = available;
             switch (_statusLine.parse(p, read))
@@ -514,13 +455,13 @@ public:
                         //FIXME: Don't consume what we read until we have our header parser.
                         // available -= read;
                         // p += read;
-                        _stage = Stage::Header;
+                        _parserStage = ParserStage::Header;
                     }
                     break;
             }
         }
 
-        if (_stage == Stage::Header)
+        if (_parserStage == ParserStage::Header)
         {
             const int64_t read = _header.parse(p, available);
             if (read < 0)
@@ -537,13 +478,13 @@ public:
                 if (_header.hasContentLength())
                 {
                     if (_header.getContentLength() > 0)
-                        _stage = Stage::Body;
+                        _parserStage = ParserStage::Body;
                     else if (_header.getContentLength() == 0)
-                        _stage = Stage::Finished; // No body, we are done.
+                        _parserStage = ParserStage::Finished; // No body, we are done.
                     else if (_header.getContentLength() < 0)
                     {
                         _state = State::Error;
-                        _stage = Stage::Finished;
+                        _parserStage = ParserStage::Finished;
                     }
                 }
 
@@ -552,14 +493,14 @@ public:
                     || _statusLine.statusCode() == 304 /*Not Modified*/) // || HEAD request
                 // || 2xx on CONNECT request
                 {
-                    _stage = Stage::Finished; // No body, we are done.
+                    _parserStage = ParserStage::Finished; // No body, we are done.
                 }
             }
         }
 
-        if (_stage == Stage::Body)
+        if (_parserStage == ParserStage::Body)
         {
-            std::cerr << "Stage::Body: " << available << "\n"
+            std::cerr << "ParserStage::Body: " << available << "\n"
                       << std::string(p, available) << std::endl;
             const int64_t read = _bodyReceiptCb(p, available);
             if (read < 0)
@@ -574,23 +515,31 @@ public:
                 _recvBodySize += read;
                 if (_header.hasContentLength() && _recvBodySize >= _header.getContentLength())
                 {
-                    _stage = Stage::Finished;
+                    _parserStage = ParserStage::Finished;
                 }
             }
         }
 
-        if (_stage == Stage::Finished)
+        if (_parserStage == ParserStage::Finished)
         {
-            std::cerr << "State::Complete\n";
-            _state = State::Complete;
+            finish();
         }
 
         return data.size() - available;
     }
 
+    /// Signifies that we got all the data we expected
+    /// and cleans up and updates the states.
+    void finish()
+    {
+        _bodyFile.close();
+        std::cerr << "State::Complete\n";
+        _state = State::Complete;
+    }
+
 private:
     /// The stage we're at in consuming the received data.
-    enum class Stage
+    enum class ParserStage
     {
         StatusLine,
         Header,
@@ -600,10 +549,9 @@ private:
 
     StatusLine _statusLine;
     HttpHeader _header;
-    State _state;
-    Stage _stage;
-    int64_t _recvBodySize;
-    BodyHandling _bodyHandling;
+    State _state; //< The state of the Response.
+    ParserStage _parserStage; //< The parser's state.
+    int64_t _recvBodySize; //< The amount of data we received (compared to the Content-Length).
     std::string _body; //< Used when _bodyHandling is InMemory.
     std::ofstream _bodyFile; //< Used when _bodyHandling is OnDisk.
     OnBodyReceipt _bodyReceiptCb; //< Used to handling body receipt in all cases.

@@ -104,8 +104,7 @@ static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::stri
 
     LOK_ASSERT_EQUAL(static_cast<int>(pocoResponse.getStatus()),
                      httpResponse.statusLine().statusCode());
-    LOK_ASSERT_EQUAL(pocoResponse.getReason(),
-                     httpResponse.statusLine().reasonPhrase());
+    LOK_ASSERT_EQUAL(pocoResponse.getReason(), httpResponse.statusLine().reasonPhrase());
 
     LOK_ASSERT_EQUAL(pocoResponse.hasContentLength(), httpResponse.header().hasContentLength());
     if (pocoResponse.hasContentLength())
