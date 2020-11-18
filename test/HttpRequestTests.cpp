@@ -32,8 +32,8 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
     void test500GetStatuses();
 };
 
-std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
-                                                        const std::string& url)
+static std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
+                                                               const std::string& url)
 {
     Poco::Net::HTTPClientSession session(host, 80);
     Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, url,
@@ -43,11 +43,15 @@ std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
     std::istream& rs = session.receiveResponse(response);
     // std::cout << response.getStatus() << ' ' << response.getReason() << std::endl;
 
-    std::ostringstream outputStringStream;
-    Poco::StreamCopier::copyStream(rs, outputStringStream);
-    std::string responseString = outputStringStream.str();
-    // std::cout << responseString << std::endl;
-    // std::cout << "-----" << std::endl;
+    std::string responseString;
+    if (response.hasContentLength() && response.getContentLength() > 0)
+    {
+        std::ostringstream outputStringStream;
+        Poco::StreamCopier::copyStream(rs, outputStringStream);
+        responseString = outputStringStream.str();
+        // std::cout << responseString << std::endl;
+        // std::cout << "-----" << std::endl;
+    }
 
     return std::make_pair(response, responseString);
 }
@@ -89,6 +93,20 @@ void HttpRequestTests::testSimpleGet()
     pollThread.joinThread();
 }
 
+static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::string& pocoBody,
+                    const HttpResponse& httpResponse)
+{
+    LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
+
+    LOK_ASSERT_EQUAL(pocoBody, httpResponse.getBody());
+
+    LOK_ASSERT_EQUAL(pocoResponse.hasContentLength(), httpResponse.header().hasContentLength());
+    if (pocoResponse.hasContentLength())
+        LOK_ASSERT_EQUAL(pocoResponse.getContentLength(), httpResponse.header().getContentLength());
+}
+
 void HttpRequestTests::test500GetStatuses()
 {
     // Start the polling thread.
@@ -120,17 +138,19 @@ void HttpRequestTests::test500GetStatuses()
         LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
         LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
         LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
-        LOK_ASSERT(httpResponse.statusLine().statusCode() == statusCode);
 
         if (statusCode % 100 == 0)
             ++curStatusCodeClass;
         LOK_ASSERT(httpResponse.statusLine().statusCategory()
                    == statusCodeClasses[curStatusCodeClass]);
 
-        if (!httpResponse.getBody().empty())
+        LOK_ASSERT(httpResponse.statusLine().statusCode() == statusCode);
+
+        if (httpResponse.statusLine().statusCategory()
+            != StatusLine::StatusCodeClass::Informational)
         {
-            const auto pocoResponse = pocoGet(host, url);
-            LOK_ASSERT_EQUAL(pocoResponse.second, httpResponse.getBody());
+            const auto pocoResponse = pocoGet(host, url); // Get via Poco in parallel.
+            compare(pocoResponse.first, pocoResponse.second, httpResponse);
         }
     }
 
