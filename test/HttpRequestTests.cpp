@@ -18,7 +18,7 @@
 #include <net/HttpRequest.hpp>
 #include <Util.hpp>
 
-/// HttpRequest unit-tests.
+/// http::Request unit-tests.
 class HttpRequestTests : public CPPUNIT_NS::TestFixture
 {
     CPPUNIT_TEST_SUITE(HttpRequestTests);
@@ -64,27 +64,27 @@ void HttpRequestTests::testSimpleGet()
     const auto pocoResponse = pocoGet(Host, URL);
 
     // Start the polling thread.
-    SocketPoll pollThread("HttpRequestPoll");
+    SocketPoll pollThread("HttpSessionPoll");
     pollThread.startThread();
 
-    HttpRequest httpRequest;
+    http::Request httpRequest;
     httpRequest.setUrl(URL);
     httpRequest.header().set("Host", Host);
 
-    auto httpSession = HttpSession::create(Host, 80, false);
+    auto httpSession = http::Session::create(Host, 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
 
-    const HttpResponse& httpResponse = httpSession->response();
+    const http::Response& httpResponse = httpSession->response();
 
     for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
         usleep(100); // Wait some more.
 
-    LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
     LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
     LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
     LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
     LOK_ASSERT(httpResponse.statusLine().statusCategory()
-               == StatusLine::StatusCodeClass::Successful);
+               == http::StatusLine::StatusCodeClass::Successful);
 
     const std::string body = httpResponse.getBody();
     LOK_ASSERT(!body.empty());
@@ -94,9 +94,9 @@ void HttpRequestTests::testSimpleGet()
 }
 
 static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::string& pocoBody,
-                    const HttpResponse& httpResponse)
+                    const http::Response& httpResponse)
 {
-    LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
     LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
     LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
 
@@ -114,21 +114,23 @@ static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::stri
 void HttpRequestTests::test500GetStatuses()
 {
     // Start the polling thread.
-    SocketPoll pollThread("HttpRequestPoll");
+    SocketPoll pollThread("HttpSessionPoll");
     pollThread.startThread();
 
     const std::string host = "httpbin.org";
 
-    HttpRequest httpRequest;
+    http::Request httpRequest;
     httpRequest.header().set("Host", host);
 
-    auto httpSession = HttpSession::create(host, 80, false);
-    const HttpResponse& httpResponse = httpSession->response();
+    auto httpSession = http::Session::create(host, 80, false);
+    const http::Response& httpResponse = httpSession->response();
 
-    StatusLine::StatusCodeClass statusCodeClasses[]
-        = { StatusLine::StatusCodeClass::Informational, StatusLine::StatusCodeClass::Successful,
-            StatusLine::StatusCodeClass::Redirection, StatusLine::StatusCodeClass::Client_Error,
-            StatusLine::StatusCodeClass::Server_Error };
+    http::StatusLine::StatusCodeClass statusCodeClasses[]
+        = { http::StatusLine::StatusCodeClass::Informational,
+            http::StatusLine::StatusCodeClass::Successful,
+            http::StatusLine::StatusCodeClass::Redirection,
+            http::StatusLine::StatusCodeClass::Client_Error,
+            http::StatusLine::StatusCodeClass::Server_Error };
     int curStatusCodeClass = -1;
     for (int statusCode = 100; statusCode < 600; ++statusCode)
     {
@@ -139,7 +141,7 @@ void HttpRequestTests::test500GetStatuses()
         for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
             usleep(100); // Wait some more.
 
-        LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+        LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
         LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
         LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
 
@@ -151,7 +153,7 @@ void HttpRequestTests::test500GetStatuses()
         LOK_ASSERT(httpResponse.statusLine().statusCode() == statusCode);
 
         if (httpResponse.statusLine().statusCategory()
-            != StatusLine::StatusCodeClass::Informational)
+            != http::StatusLine::StatusCodeClass::Informational)
         {
             const auto pocoResponse = pocoGet(host, url); // Get via Poco in parallel.
             compare(pocoResponse.first, pocoResponse.second, httpResponse);

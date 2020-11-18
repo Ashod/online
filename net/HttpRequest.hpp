@@ -25,6 +25,8 @@
 #include "Log.hpp"
 #include "Util.hpp"
 
+namespace http
+{
 /// The parse-state of a field.
 enum class FieldParseState
 {
@@ -36,7 +38,7 @@ enum class FieldParseState
 };
 
 /// An HTTP Header.
-class HttpHeader
+class Header
 {
 public:
     static constexpr const char* CONTENT_TYPE = "Content-Type";
@@ -153,16 +155,16 @@ private:
     Container _headers;
 };
 
-/// An HTTP Request made over HttpSession.
-class HttpRequest final
+/// An HTTP Request made over Session.
+class Request final
 {
 public:
     static constexpr const char* VERB_GET = "GET";
     static constexpr const char* VERB_POST = "POST";
     static constexpr const char* VERS_1_1 = "HTTP/1.1";
 
-    HttpRequest(const std::string& url = "/", const std::string& verb = VERB_GET,
-                const std::string& version = VERS_1_1)
+    Request(const std::string& url = "/", const std::string& verb = VERB_GET,
+            const std::string& version = VERS_1_1)
         : _url(url)
         , _verb(verb)
         , _version(version)
@@ -186,8 +188,8 @@ public:
     const std::string& getVersion() const { return _version; }
 
     /// The header object to populate.
-    HttpHeader& header() { return _header; }
-    const HttpHeader& header() const { return _header; }
+    Header& header() { return _header; }
+    const Header& header() const { return _header; }
 
     /// Callback to read the body into the request.
     /// Returns the number of bytes written, 0 for end of body,
@@ -201,7 +203,7 @@ public:
     int64_t readBody(const char* data, int64_t len) { return _bodyReaderCb(data, len); }
 
 private:
-    HttpHeader _header;
+    Header _header;
     std::string _url; //< The URL to request.
     std::string _verb; //< The verb of the request.
     std::string _version; //< The protocol version of the request.
@@ -368,7 +370,7 @@ private:
     std::string _reasonPhrase; //< A client SHOULD ignore the reason-phrase content.
 };
 
-class HttpResponse final
+class Response final
 {
 public:
     /// The callback signature for handling body data.
@@ -376,7 +378,7 @@ public:
     /// Returning -1 will terminate the connection.
     using OnData = std::function<int64_t(const char* p, int64_t len)>;
 
-    HttpResponse()
+    Response()
         : _state(State::New)
         , _parserStage(ParserStage::StatusLine)
         , _recvBodySize(0)
@@ -392,7 +394,7 @@ public:
         _recvBodySize = 0;
         _body.clear();
         _statusLine = StatusLine();
-        _header = HttpHeader();
+        _header = Header();
     }
 
     /// The state of the response.
@@ -412,7 +414,7 @@ public:
 
     const StatusLine& statusLine() const { return _statusLine; }
 
-    const HttpHeader& header() const { return _header; }
+    const Header& header() const { return _header; }
 
     void saveBodyToFile(const std::string& path)
     {
@@ -560,7 +562,7 @@ private:
     };
 
     StatusLine _statusLine;
-    HttpHeader _header;
+    Header _header;
     State _state; //< The state of the Response.
     ParserStage _parserStage; //< The parser's state.
     int64_t _recvBodySize; //< The amount of data we received (compared to the Content-Length).
@@ -571,9 +573,9 @@ private:
 
 /// A client socket to make asynchronous HTTP requests.
 /// Designed to be reused for multiple requests.
-class HttpSession final : public ProtocolHandlerInterface
+class Session final : public ProtocolHandlerInterface
 {
-    HttpSession(const std::string& host, const std::string& port, bool secure)
+    Session(const std::string& host, const std::string& port, bool secure)
         : _host(host)
         , _port(port)
         , _secure(secure)
@@ -591,13 +593,13 @@ class HttpSession final : public ProtocolHandlerInterface
     };
 
 public:
-    static std::shared_ptr<HttpSession> create(const std::string& host, const std::string& port,
-                                               bool secure)
+    static std::shared_ptr<Session> create(const std::string& host, const std::string& port,
+                                           bool secure)
     {
-        return std::shared_ptr<HttpSession>(new HttpSession(host, port, secure));
+        return std::shared_ptr<Session>(new Session(host, port, secure));
     }
 
-    static std::shared_ptr<HttpSession> create(const std::string& host, const int port, bool secure)
+    static std::shared_ptr<Session> create(const std::string& host, const int port, bool secure)
     {
         return create(host, std::to_string(port), secure);
     }
@@ -606,9 +608,9 @@ public:
     const std::string& port() const { return _port; }
     bool secure() const { return _secure; }
 
-    const HttpResponse& response() const { return _response; }
+    const Response& response() const { return _response; }
 
-    void asyncGet(const HttpRequest& req, SocketPoll& poll)
+    void asyncGet(const Request& req, SocketPoll& poll)
     {
         std::cerr << "asyncGet\n";
         _response.reset();
@@ -734,12 +736,12 @@ private:
     Stage _recvStage;
     std::shared_ptr<StreamSocket> _socket;
     int _sendBufferSize;
-    HttpRequest _request;
-    HttpResponse _response;
+    Request _request;
+    Response _response;
     bool _connected;
 };
 
-inline bool HttpSession::connect()
+inline bool Session::connect()
 {
     LOG_DBG("Connecting to " << _host << " : " << _port << " (" << (_secure ? "SSL" : "plain")
                              << ")");
@@ -802,5 +804,7 @@ inline bool HttpSession::connect()
 
     return _socket != nullptr;
 }
+
+} // namespace http
 
 /* vim:set shiftwidth=4 softtabstop=4 expandtab: */
