@@ -24,32 +24,40 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST_SUITE(HttpRequestTests);
 
     CPPUNIT_TEST(testSimpleGet);
-    CPPUNIT_TEST(testGetStatus);
+    CPPUNIT_TEST(test500GetStatuses);
 
     CPPUNIT_TEST_SUITE_END();
 
     void testSimpleGet();
-    void testGetStatus();
+    void test500GetStatuses();
 };
+
+std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
+                                                        const std::string& url)
+{
+    Poco::Net::HTTPClientSession session(host, 80);
+    Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, url,
+                                   Poco::Net::HTTPMessage::HTTP_1_1);
+    session.sendRequest(request);
+    Poco::Net::HTTPResponse response;
+    std::istream& rs = session.receiveResponse(response);
+    // std::cout << response.getStatus() << ' ' << response.getReason() << std::endl;
+
+    std::ostringstream outputStringStream;
+    Poco::StreamCopier::copyStream(rs, outputStringStream);
+    std::string responseString = outputStringStream.str();
+    // std::cout << responseString << std::endl;
+    // std::cout << "-----" << std::endl;
+
+    return std::make_pair(response, responseString);
+}
 
 void HttpRequestTests::testSimpleGet()
 {
     const char* Host = "www.example.com";
     const char* URL = "/";
 
-    Poco::Net::HTTPClientSession session(Host, 80);
-    Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, URL,
-                                   Poco::Net::HTTPMessage::HTTP_1_1);
-    session.sendRequest(request);
-    Poco::Net::HTTPResponse response;
-    std::istream& rs = session.receiveResponse(response);
-    std::cout << response.getStatus() << ' ' << response.getReason() << std::endl;
-
-    std::ostringstream outputStringStream;
-    Poco::StreamCopier::copyStream(rs, outputStringStream);
-    std::string responseString = outputStringStream.str();
-    std::cout << responseString << std::endl;
-    std::cout << "-----" << std::endl;
+    const auto pocoResponse = pocoGet(Host, URL);
 
     // Start the polling thread.
     SocketPoll pollThread("HttpRequestPoll");
@@ -75,23 +83,24 @@ void HttpRequestTests::testSimpleGet()
                == StatusLine::StatusCodeClass::Successful);
 
     const std::string body = httpResponse.getBody();
-    LOK_ASSERT(!httpResponse.getBody().empty());
-
-    LOK_ASSERT_EQUAL(responseString, body);
+    LOK_ASSERT(!body.empty());
+    LOK_ASSERT_EQUAL(pocoResponse.second, body);
 
     pollThread.joinThread();
 }
 
-void HttpRequestTests::testGetStatus()
+void HttpRequestTests::test500GetStatuses()
 {
     // Start the polling thread.
     SocketPoll pollThread("HttpRequestPoll");
     pollThread.startThread();
 
-    HttpRequest httpRequest;
-    httpRequest.header().set("Host", "httpbin.org");
+    const std::string host = "httpbin.org";
 
-    auto httpSession = HttpSession::create("httpbin.org", 80, false);
+    HttpRequest httpRequest;
+    httpRequest.header().set("Host", host);
+
+    auto httpSession = HttpSession::create(host, 80, false);
     const HttpResponse& httpResponse = httpSession->response();
 
     StatusLine::StatusCodeClass statusCodeClasses[]
@@ -101,7 +110,8 @@ void HttpRequestTests::testGetStatus()
     int curStatusCodeClass = -1;
     for (int statusCode = 100; statusCode < 600; ++statusCode)
     {
-        httpRequest.setUrl("/status/" + std::to_string(statusCode));
+        const std::string url = "/status/" + std::to_string(statusCode);
+        httpRequest.setUrl(url);
         httpSession->asyncGet(httpRequest, pollThread);
 
         for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
@@ -117,8 +127,13 @@ void HttpRequestTests::testGetStatus()
         LOK_ASSERT(httpResponse.statusLine().statusCategory()
                    == statusCodeClasses[curStatusCodeClass]);
 
-        LOK_ASSERT(httpResponse.getBody().empty());
+        if (!httpResponse.getBody().empty())
+        {
+            const auto pocoResponse = pocoGet(host, url);
+            LOK_ASSERT_EQUAL(pocoResponse.second, httpResponse.getBody());
+        }
     }
+
     pollThread.joinThread();
 }
 
