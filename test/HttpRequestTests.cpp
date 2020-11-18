@@ -23,19 +23,19 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST_SUITE(HttpRequestTests);
 
     CPPUNIT_TEST(testSimpleGet);
+    CPPUNIT_TEST(testGetStatus);
 
     CPPUNIT_TEST_SUITE_END();
 
     void testSimpleGet();
+    void testGetStatus();
 };
-
 void HttpRequestTests::testSimpleGet()
 {
     Poco::Net::HTTPClientSession session("example.com", 80);
     Poco::Net::HTTPRequest request(Poco::Net::HTTPRequest::HTTP_GET, "/",
                                    Poco::Net::HTTPMessage::HTTP_1_1);
     session.sendRequest(request);
-
     Poco::Net::HTTPResponse response;
     std::istream& rs = session.receiveResponse(response);
     std::cout << response.getStatus() << ' ' << response.getReason() << std::endl;
@@ -69,6 +69,37 @@ void HttpRequestTests::testSimpleGet()
     const std::string body = httpResponse.getBody();
 
     LOK_ASSERT_EQUAL(responseString, body);
+
+    pollThread.joinThread();
+}
+
+void HttpRequestTests::testGetStatus()
+{
+    // Start the polling thread.
+    SocketPoll pollThread("HttpRequestPoll");
+    pollThread.startThread();
+
+    HttpRequest httpRequest;
+    httpRequest.setUrl("/status/200");
+    httpRequest.header().set("Host", "httpbin.org");
+    // httpRequest.set("Connection", "upgrade");
+    // httpRequest.set("Upgrade", "upgrade");
+    auto httpSession = HttpSession::create("httpbin.org", 80, false);
+    httpSession->asyncGet(httpRequest, pollThread);
+
+    const HttpResponse& httpResponse = httpSession->response();
+
+    while (!httpResponse.done())
+    {
+        // Wait some more.
+        usleep(100);
+    }
+
+    // LOK_ASSERT(httpResponse.statusCategory() == HttpResponse::StatusCodeClass::Successful);
+    LOK_ASSERT(httpResponse.state() == HttpResponse::State::Complete);
+
+    const std::string body = httpResponse.getBody();
+    std::cout << body << std::endl;
 
     pollThread.joinThread();
 }

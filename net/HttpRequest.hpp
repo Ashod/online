@@ -89,10 +89,13 @@ public:
             response.read(data);
             setContentLength(response.getContentLength());
             setContentType(response.getContentType());
+            std::cerr << "Read " << data.tellg() << " bytes of header:" << std::endl;
+            std::cerr << std::string(p, data.tellg()) << std::endl;
             return data.tellg();
         }
         catch (const Poco::Exception& exc)
         {
+            std::cerr << "ERROR: " << exc.displayText() << std::endl;
         }
 
         return 0;
@@ -496,7 +499,11 @@ public:
             {
                 available -= read;
                 p += read;
-                _stage = Stage::Body;
+
+                if (_header.hasContentLength() && _header.getContentLength() == 0)
+                    _stage = Stage::Finished; // No body, we are done.
+                else
+                    _stage = Stage::Body;
             }
         }
 
@@ -515,12 +522,16 @@ public:
             {
                 available -= read;
                 _recvBodySize += read;
-                if (_header.getContentLength() >= _recvBodySize)
+                if (_header.hasContentLength() && _recvBodySize >= _header.getContentLength())
                 {
                     _stage = Stage::Finished;
-                    _state = State::Complete;
                 }
             }
+        }
+
+        if (_stage == Stage::Finished)
+        {
+            _state = State::Complete;
         }
 
         return data.size() - available;
@@ -632,23 +643,6 @@ public:
     virtual void handleIncomingMessage(SocketDisposition&) override
     {
         std::cout << "handleIncomingMessage\n";
-
-        // if (_state != State::RecvBody)
-        // {
-        //     // Must be a header.
-
-        // }
-
-        // if (_state == State::RecvBody)
-        // {
-        //     _body
-
-        // }
-
-        // _response = HttpResponse();
-        // StatusLine statusLine
-        // std::string res(_socket->getInBuffer().data(), _socket->getInBuffer().size());
-        // std::cout << res;
 
         std::vector<char>& data = _socket->getInBuffer();
         const int64_t read = _response.handleData(data);
