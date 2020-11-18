@@ -10,6 +10,7 @@
 #include <Poco/MemoryStream.h>
 #include <Poco/Net/HTTPResponse.h>
 
+#include <cstdint>
 #include <fstream>
 #include <sstream>
 #include <sys/types.h>
@@ -165,6 +166,7 @@ public:
         : _url(url)
         , _verb(verb)
         , _version(version)
+        , _bodyReaderCb([](const char*, int64_t) { return 0; })
     {
     }
 
@@ -185,12 +187,25 @@ public:
 
     /// The header object to populate.
     HttpHeader& header() { return _header; }
+    const HttpHeader& header() const { return _header; }
+
+    /// Callback to read the body into the request.
+    /// Returns the number of bytes written, 0 for end of body,
+    /// -1 for error (terminates the request).
+    using BodyReaderCb = std::function<int64_t(const char*, int64_t)>;
+
+    /// Set the request body. Meaningful for POST.
+    void setBodyReader(BodyReaderCb bodyReaderCb) { _bodyReaderCb = std::move(bodyReaderCb); }
+
+    /// Read the body contents. Used to send the request.
+    int64_t readBody(const char* data, int64_t len) { return _bodyReaderCb(data, len); }
 
 private:
     HttpHeader _header;
     std::string _url; //< The URL to request.
     std::string _verb; //< The verb of the request.
     std::string _version; //< The protocol version of the request.
+    BodyReaderCb _bodyReaderCb;
 };
 
 /// HTTP Status Line is the first line of a response sent by a server.
@@ -245,6 +260,7 @@ public:
 
     /// Skips over space and tab characters starting at off.
     /// Returns the offset of the first match, otherwise, len.
+    /// Technically, we should skip: SP, HTAB, VT (%x0B), FF (%x0C), or bare CR.
     int64_t skipSpaceAndTab(const char* p, int64_t off, int64_t len)
     {
         for (; off < len; ++off)
@@ -565,22 +581,20 @@ class HttpSession final : public ProtocolHandlerInterface
         : _host(host)
         , _port(port)
         , _secure(secure)
-        , _state(State::New)
+        , _sendStage(Stage::Header)
+        , _recvStage(Stage::Header)
         , _connected(false)
     {
     }
 
-public:
-    enum class State
+    enum class Stage
     {
-        New, //< A new request.
-        SendHeader, //< Request header sending pending.
-        SendBody, //< Request body sending progress or in progress (for POST only).
-        RecvHeader, //< Response header reading in progress.
-        RecvBody, //< Response body reading in progress (optional, if a body exists).
-        Finished //< A request has been satisfied.
+        Header, //< Communicate the header.
+        Body, //< Communicate the body (if any).
+        Finished //< Done.
     };
 
+public:
     static std::shared_ptr<HttpSession> create(const std::string& host, const std::string& port,
                                                bool secure)
     {
@@ -596,8 +610,6 @@ public:
     const std::string& port() const { return _port; }
     bool secure() const { return _secure; }
 
-    State state() const { return _state; }
-
     const HttpResponse& response() const { return _response; }
 
     void asyncGet(const HttpRequest& req, SocketPoll& poll)
@@ -605,10 +617,12 @@ public:
         std::cerr << "asyncGet\n";
         _response.reset();
         _request = req;
-        _state = State::SendHeader; // Once we reset the state, we can get data.
+        _sendStage = Stage::Header;
+        _recvStage = Stage::Header;
 
         if (!_connected && connect())
         {
+            _sendBufferSize = _socket->getSendBufferSize();
             std::cerr << "Connected\n";
             poll.insertNewSocket(_socket);
         }
@@ -634,7 +648,7 @@ public:
         _socket->getIOStats(sent, recv);
     }
 
-    virtual void handleIncomingMessage(SocketDisposition&) override
+    virtual void handleIncomingMessage(SocketDisposition& disposition) override
     {
         std::cout << "handleIncomingMessage\n";
 
@@ -648,6 +662,7 @@ public:
         else if (read < 0)
         {
             // Interrupt the transfer.
+            disposition.setClosed();
         }
     }
 
@@ -656,7 +671,7 @@ public:
     {
         std::cout << "getPollEvents\n";
         int events = POLLIN;
-        if (_state == State::SendHeader || _state == State::SendBody)
+        if (_sendStage != Stage::Finished)
             events |= POLLOUT;
         return events;
     }
@@ -664,7 +679,7 @@ public:
     void performWrites() override
     {
         std::cout << "performWrites\n";
-        if (_state == State::SendHeader)
+        if (_sendStage == Stage::Header)
         {
             std::ostringstream oss;
             oss << _request.getVerb() << ' ' << _request.getUrl() << ' ' << _request.getVersion()
@@ -675,10 +690,29 @@ public:
 
             Buffer& out = _socket->getOutBuffer();
             out.append(header.data(), header.size());
-            std::cout << "performWrites: " << out.size() << "\n";
+            std::cout << "performWrites (header): " << header.size() << "\n";
             // TODO: Write body in post requests.
-            _state = State::RecvHeader;
+            _sendStage = Stage::Body;
             _socket->writeOutgoingData();
+        }
+
+        {
+            char buffer[16 * 1024];
+            const int64_t read = _request.readBody(buffer, sizeof(buffer));
+            if (read == 0)
+            {
+                _sendStage = Stage::Finished;
+            }
+            else if (read > 0)
+            {
+                Buffer& out = _socket->getOutBuffer();
+                out.append(buffer, read);
+                std::cout << "performWrites (body): " << read << "\n";
+            }
+            else
+            {
+                //TODO: error out.
+            }
         }
     }
 
@@ -700,8 +734,10 @@ private:
     const std::string _host;
     const std::string _port;
     const bool _secure;
-    State _state;
+    Stage _sendStage;
+    Stage _recvStage;
     std::shared_ptr<StreamSocket> _socket;
+    int _sendBufferSize;
     HttpRequest _request;
     HttpResponse _response;
     bool _connected;
