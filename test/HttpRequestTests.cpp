@@ -43,7 +43,7 @@ void HttpRequestTests::testSimpleGet()
     std::ostringstream outputStringStream;
     Poco::StreamCopier::copyStream(rs, outputStringStream);
     std::string responseString = outputStringStream.str();
-    std::cout << responseString << std::endl;
+    // std::cout << responseString << std::endl;
 
     // Start the polling thread.
     SocketPoll pollThread("HttpRequestPoll");
@@ -63,10 +63,12 @@ void HttpRequestTests::testSimpleGet()
     while (!httpResponse.done())
     {
         // Wait some more.
-        sleep(1);
+        usleep(100);
     }
 
-    std::string body = httpResponse.getBody();
+    const std::string body = httpResponse.getBody();
+
+    LOK_ASSERT_EQUAL(responseString, body);
 
     pollThread.joinThread();
 }

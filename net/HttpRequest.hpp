@@ -7,8 +7,10 @@
 
 #pragma once
 
-#include <bits/stdint-intn.h>
-#include <cctype>
+#include <Poco/MemoryStream.h>
+#include <Poco/Net/HTTPResponse.h>
+
+#include <fstream>
 #include <sstream>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -77,12 +79,24 @@ public:
     //     }
     // }
 
-    // static HttpHeader parse(const char* p, int64_t len)
-    // {
-    //     HttpHeader hdr;
+    int64_t parse(const char* p, int64_t len)
+    {
+        try
+        {
+            Poco::MemoryInputStream data(p, len);
 
-    //     return hdr;
-    // }
+            Poco::Net::HTTPResponse response;
+            response.read(data);
+            setContentLength(response.getContentLength());
+            setContentType(response.getContentType());
+            return data.tellg();
+        }
+        catch (const Poco::Exception& exc)
+        {
+        }
+
+        return 0;
+    }
 
     /// Set an HTTP header field.
     void set(const std::string& key, const std::string& value)
@@ -214,7 +228,11 @@ public:
     static constexpr int64_t MinValidStatusCode = 100;
     static constexpr int64_t MaxValidStatusCode = 599;
 
-    StatusLine(const std::string& version, int code, const std::string& reason)
+    static constexpr const char* HTTP_1_1 = "HTTP/1.1";
+    static constexpr const char* OK = "OK";
+
+    StatusLine(const std::string& version = HTTP_1_1, int code = 200,
+               const std::string& reason = OK)
         : _httpVersion(version)
         , _statusCode(code)
         , _reasonPhrase(reason)
@@ -234,7 +252,9 @@ public:
         return len;
     }
 
-    FieldParseState parse(const char* p, int64_t len)
+    /// Parses a Status Line.
+    /// Returns the state and clobbers the len on succcess to the number of bytes read.
+    FieldParseState parse(const char* p, int64_t& len)
     {
         // First line is the status line.
         if (p == nullptr || len < MinStatusLineLen)
@@ -251,7 +271,7 @@ public:
         // We should have the version now.
         assert(off + VersionLen < len && "Expected to have more data.");
         const char* version = &p[off];
-        constexpr int VersionMajPos = sizeof("HTTP/");
+        constexpr int VersionMajPos = sizeof("HTTP/") - 1;
         constexpr int VersionDotPos = VersionMajPos + 1;
         constexpr int VersionMinPos = VersionDotPos + 1;
         const int versionMajor = version[VersionMajPos] - '0';
@@ -286,7 +306,7 @@ public:
         if (off >= MaxStatusLineLen)
             return FieldParseState::Invalid;
 
-        const char* reason = &p[off];
+        const int64_t reasonOff = off;
 
         // Find the line break, which ends the status line.
         for (; off < len; ++off)
@@ -294,15 +314,16 @@ public:
             if (p[off] == '\n')
                 break;
 
-            if (len >= MaxStatusLineLen)
+            if (off >= MaxStatusLineLen)
                 return FieldParseState::Invalid;
         }
 
         if (off >= len)
             return FieldParseState::Incomplete;
 
-        _reasonPhrase = std::string(reason, off);
+        _reasonPhrase = std::string(&p[reasonOff], off - reasonOff);
 
+        len = off + 1; // Include the '\n'.
         return FieldParseState::Valid;
     }
 
@@ -323,10 +344,23 @@ private:
 class HttpResponse final
 {
 public:
+    /// The callback signature for handling body data.
+    /// Receives a vector with the data, returns the number of bytes consumed.
+    /// Returning -1 will terminate the connection.
+    using OnBodyReceipt = std::function<int64_t(const char* p, int64_t len)>;
+
     HttpResponse()
         : _statusCategory(StatusCodeClass::Informational)
         , _state(State::New)
+        , _stage(Stage::StatusLine)
+        , _recvBodySize(0)
+        , _bodyHandling(BodyHandling::InMemory)
     {
+        // By default we store the body in memory.
+        _bodyReceiptCb = [this](const char* p, int64_t len) {
+            _body.insert(_body.end(), p, p + len);
+            return len;
+        };
     }
 
     /// The Status Code class of the response.
@@ -360,12 +394,39 @@ public:
     const HttpHeader& header() const { return _header; }
     HttpHeader& header() { return _header; }
 
-    ///
-    std::string getBody() const
+    enum class BodyHandling
     {
-        // TODO: Check and throw.
-        return std::string();
+        InMemory, //< The response body is stored in memory, read by getBody().
+        OnDisk, //< The response body is stored on disk to a given path.
+        Callback //< The body is passed to the client by a callback.
+    };
+
+    bool saveBodyToFile(const std::string& path)
+    {
+        if (_bodyHandling != BodyHandling::InMemory)
+            return false;
+
+        _bodyHandling = BodyHandling::OnDisk;
+        _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
+        _bodyReceiptCb = [this](const char* p, int64_t len) {
+            _bodyFile.write(p, len);
+            return _bodyFile.good() ? len : -1;
+        };
+        return true;
     }
+
+    bool setOnBodyReceiptHandler(OnBodyReceipt bodyReceiptCb)
+    {
+        if (_bodyHandling != BodyHandling::InMemory)
+            return false;
+
+        _bodyHandling = BodyHandling::Callback;
+        _bodyReceiptCb = std::move(bodyReceiptCb);
+        return true;
+    }
+
+    /// Returns the body, assuming it wasn't redirected to file or callback.
+    std::string getBody() const { return _body; }
 
     // /// Returns the position where '\n' is found, otherwise -1.
     // static int64_t seekLineBreak(const char* p, int64_t len, int64_t lim)
@@ -386,10 +447,105 @@ public:
     //     return HttpHeader::validate(p + i, len - i);
     // }
 
+    /// Handles incoming data.
+    /// Returns the number of bytes consumed, or -1 for error
+    /// and/or to interrupt transmission.
+    int64_t handleData(const std::vector<char>& data)
+    {
+        // We got some data.
+        _state = State::Incomplete;
+
+        const char* p = data.data();
+        int64_t available = data.size();
+        if (_stage == Stage::StatusLine)
+        {
+            _stage = Stage::Header;
+            // int64_t read = available;
+            // switch (_statusLine.parse(p, read))
+            // {
+            //     case FieldParseState::Unknown:
+            //     case FieldParseState::Complete:
+            //     case FieldParseState::Incomplete:
+            //         return 0;
+            //     case FieldParseState::Invalid:
+            //         _state = State::Error;
+            //         return -1;
+            //     case FieldParseState::Valid:
+            //         if (read <= 0)
+            //             return read; // Unexpected, really.
+            //         if (read > 0)
+            //         {
+            //             available -= read;
+            //             p += read;
+            //             _stage = Stage::Header;
+            //         }
+            //         break;
+            // }
+        }
+
+        if (_stage == Stage::Header)
+        {
+            const int64_t read = _header.parse(p, available);
+            if (read < 0)
+            {
+                _state = State::Error;
+                return read;
+            }
+
+            if (read > 0)
+            {
+                available -= read;
+                p += read;
+                _stage = Stage::Body;
+            }
+        }
+
+        if (_stage == Stage::Body)
+        {
+            // std::cerr << "Stage::Body: " << available << "\n"
+            //           << std::string(p, available) << std::endl;
+            const int64_t read = _bodyReceiptCb(p, available);
+            if (read < 0)
+            {
+                _state = State::Error;
+                return read;
+            }
+
+            if (read > 0)
+            {
+                available -= read;
+                _recvBodySize += read;
+                if (_header.getContentLength() >= _recvBodySize)
+                {
+                    _stage = Stage::Finished;
+                    _state = State::Complete;
+                }
+            }
+        }
+
+        return data.size() - available;
+    }
+
 private:
+    /// The stage we're at in consuming the received data.
+    enum class Stage
+    {
+        StatusLine,
+        Header,
+        Body,
+        Finished
+    };
+
+    StatusLine _statusLine;
     HttpHeader _header;
     StatusCodeClass _statusCategory;
     State _state;
+    Stage _stage;
+    int64_t _recvBodySize;
+    BodyHandling _bodyHandling;
+    std::string _body; //< Used when _bodyHandling is InMemory.
+    std::ofstream _bodyFile; //< Used when _bodyHandling is OnDisk.
+    OnBodyReceipt _bodyReceiptCb; //< Used to handling body receipt in all cases.
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -477,10 +633,34 @@ public:
     {
         std::cout << "handleIncomingMessage\n";
 
+        // if (_state != State::RecvBody)
+        // {
+        //     // Must be a header.
+
+        // }
+
+        // if (_state == State::RecvBody)
+        // {
+        //     _body
+
+        // }
+
         // _response = HttpResponse();
         // StatusLine statusLine
-        std::string res(_socket->getInBuffer().data(), _socket->getInBuffer().size());
-        std::cout << res;
+        // std::string res(_socket->getInBuffer().data(), _socket->getInBuffer().size());
+        // std::cout << res;
+
+        std::vector<char>& data = _socket->getInBuffer();
+        const int64_t read = _response.handleData(data);
+        if (read > 0)
+        {
+            // Remove consumed data.
+            data.erase(data.begin(), data.begin() + read);
+        }
+        else if (read < 0)
+        {
+            // Interrupt the transfer.
+        }
     }
 
     int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
