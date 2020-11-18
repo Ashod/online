@@ -342,7 +342,7 @@ public:
         // Find the line break, which ends the status line.
         for (; off < len; ++off)
         {
-            if (p[off] == '\n')
+            if (p[off] == '\r' || p[off] == '\n')
                 break;
 
             if (off >= MaxStatusLineLen)
@@ -354,7 +354,14 @@ public:
 
         _reasonPhrase = std::string(&p[reasonOff], off - reasonOff);
 
-        len = off + 1; // Include the '\n'.
+        // Consume the line breaks.
+        for (; off < len; ++off)
+        {
+            if (p[off] != '\r' && p[off] != '\n')
+                break;
+        }
+
+        len = off;
         return FieldParseState::Valid;
     }
 
