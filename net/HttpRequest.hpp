@@ -169,12 +169,21 @@ public:
     static constexpr const char* VERB_POST = "POST";
     static constexpr const char* VERS_1_1 = "HTTP/1.1";
 
+    /// The stages of processing the request.
+    enum class Stage
+    {
+        Header, //< Communicate the header.
+        Body, //< Communicate the body (if any).
+        Finished //< Done.
+    };
+
     Request(const std::string& url = "/", const std::string& verb = VERB_GET,
             const std::string& version = VERS_1_1)
         : _url(url)
         , _verb(verb)
         , _version(version)
         , _bodyReaderCb([](const char*, int64_t) { return 0; })
+        , _stage(Stage::Header)
     {
     }
 
@@ -200,8 +209,43 @@ public:
     /// Set the request body source. Meaningful for POST, to send some payload.
     void setBodySource(IoFunc bodyReaderCb) { _bodyReaderCb = std::move(bodyReaderCb); }
 
-    /// Read the body contents. Used to send the request.
-    int64_t readBody(const char* data, int64_t len) { return _bodyReaderCb(data, len); }
+    Stage stage() const { return _stage; }
+
+    bool writeData(Buffer& out)
+    {
+        if (_stage == Stage::Header)
+        {
+            std::ostringstream oss;
+            oss << getVerb() << ' ' << getUrl() << ' ' << getVersion() << "\r\n";
+            header().serialize(oss);
+            oss << "\r\n";
+            const std::string header = oss.str();
+
+            out.append(header.data(), header.size());
+            std::cout << "performWrites (header): " << header.size() << "\n";
+            _stage = Stage::Body;
+        }
+
+        if (_stage == Stage::Body)
+        {
+            char buffer[16 * 1024];
+            const int64_t read = _bodyReaderCb(buffer, sizeof(buffer));
+            if (read < 0)
+                return false;
+
+            if (read == 0)
+            {
+                _stage = Stage::Finished;
+            }
+            else if (read > 0)
+            {
+                out.append(buffer, read);
+                std::cout << "performWrites (body): " << read << "\n";
+            }
+        }
+
+        return true;
+    }
 
 private:
     Header _header;
@@ -209,6 +253,7 @@ private:
     std::string _verb; //< The verb of the request.
     std::string _version; //< The protocol version of the request.
     IoFunc _bodyReaderCb;
+    Stage _stage;
 };
 
 /// HTTP Status Line is the first line of a response sent by a server.
@@ -575,18 +620,9 @@ class Session final : public ProtocolHandlerInterface
         : _host(host)
         , _port(port)
         , _secure(secure)
-        , _sendStage(Stage::Header)
-        , _recvStage(Stage::Header)
         , _connected(false)
     {
     }
-
-    enum class Stage
-    {
-        Header, //< Communicate the header.
-        Body, //< Communicate the body (if any).
-        Finished //< Done.
-    };
 
 public:
     static std::shared_ptr<Session> create(const std::string& host, const std::string& port,
@@ -611,8 +647,6 @@ public:
         std::cerr << "asyncGet\n";
         _response.reset();
         _request = req;
-        _sendStage = Stage::Header;
-        _recvStage = Stage::Header;
 
         if (!_connected && connect())
         {
@@ -648,7 +682,7 @@ private:
     {
         std::cout << "getPollEvents\n";
         int events = POLLIN;
-        if (_sendStage != Stage::Finished)
+        if (_request.stage() != Request::Stage::Finished)
             events |= POLLOUT;
         return events;
     }
@@ -664,7 +698,7 @@ private:
             // Remove consumed data.
             data.erase(data.begin(), data.begin() + read);
         }
-        else if (read < 0)
+        else if (read < 0 || _response.done())
         {
             // Interrupt the transfer.
             disposition.setClosed();
@@ -674,41 +708,15 @@ private:
     void performWrites() override
     {
         std::cout << "performWrites\n";
-        if (_sendStage == Stage::Header)
-        {
-            std::ostringstream oss;
-            oss << _request.getVerb() << ' ' << _request.getUrl() << ' ' << _request.getVersion()
-                << "\r\n";
-            _request.header().serialize(oss);
-            oss << "\r\n";
-            const std::string header = oss.str();
 
-            Buffer& out = _socket->getOutBuffer();
-            out.append(header.data(), header.size());
-            std::cout << "performWrites (header): " << header.size() << "\n";
-            // TODO: Write body in post requests.
-            _sendStage = Stage::Body;
-            _socket->writeOutgoingData();
+        Buffer& out = _socket->getOutBuffer();
+        if (!_request.writeData(out))
+        {
+            _socket->shutdown();
         }
-
-        if (_sendStage == Stage::Body)
+        else if (!out.empty())
         {
-            char buffer[16 * 1024];
-            const int64_t read = _request.readBody(buffer, sizeof(buffer));
-            if (read == 0)
-            {
-                _sendStage = Stage::Finished;
-            }
-            else if (read > 0)
-            {
-                Buffer& out = _socket->getOutBuffer();
-                out.append(buffer, read);
-                std::cout << "performWrites (body): " << read << "\n";
-            }
-            else
-            {
-                //TODO: error out.
-            }
+            _socket->writeOutgoingData();
         }
     }
 
@@ -729,8 +737,6 @@ private:
     const std::string _host;
     const std::string _port;
     const bool _secure;
-    Stage _sendStage;
-    Stage _recvStage;
     std::shared_ptr<StreamSocket> _socket;
     int _sendBufferSize;
     Request _request;
