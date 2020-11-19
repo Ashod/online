@@ -40,8 +40,15 @@ enum class FieldParseState
 /// The callback signature for handling IO data.
 /// Returns the number of bytes read/written,
 /// -1 for error (terminates the transfer).
-/// When reading from a source, returning 0 means EOF.
-using IoFunc = std::function<int64_t(const char*, int64_t)>;
+/// The second argument is the data size in the buffer.
+using IoWriteFunc = std::function<int64_t(const char*, int64_t)>;
+
+/// The callback signature for handling IO reads.
+/// Returns the number of bytes written to the buffer,
+/// 0 when no more data is left to read,
+/// -1 for error (terminates the transfer).
+/// The second argument is the buffer size.
+using IoReadFunc = std::function<int64_t(char*, int64_t)>;
 
 /// An HTTP Header.
 class Header
@@ -206,8 +213,13 @@ public:
     Header& header() { return _header; }
     const Header& header() const { return _header; }
 
-    /// Set the request body source. Meaningful for POST, to send some payload.
-    void setBodySource(IoFunc bodyReaderCb) { _bodyReaderCb = std::move(bodyReaderCb); }
+    /// Set the request body source to upload some data. Meaningful for POST.
+    /// Size is needed to set the Content-Length.
+    void setBodySource(IoReadFunc bodyReaderCb, int64_t size)
+    {
+        header().setContentLength(size);
+        _bodyReaderCb = std::move(bodyReaderCb);
+    }
 
     Stage stage() const { return _stage; }
 
@@ -222,7 +234,7 @@ public:
             const std::string header = oss.str();
 
             out.append(header.data(), header.size());
-            std::cout << "performWrites (header): " << header.size() << "\n";
+            std::cerr << "performWrites (header): " << header.size() << "\n";
             _stage = Stage::Body;
         }
 
@@ -240,7 +252,7 @@ public:
             else if (read > 0)
             {
                 out.append(buffer, read);
-                std::cout << "performWrites (body): " << read << "\n";
+                std::cerr << "performWrites (body): " << read << "\n";
             }
         }
 
@@ -252,7 +264,7 @@ private:
     std::string _url; //< The URL to request.
     std::string _verb; //< The verb of the request.
     std::string _version; //< The protocol version of the request.
-    IoFunc _bodyReaderCb;
+    IoReadFunc _bodyReaderCb;
     Stage _stage;
 };
 
@@ -460,18 +472,18 @@ public:
     void saveBodyToFile(const std::string& path)
     {
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
-        _onBodyCb = [this](const char* p, int64_t len) {
+        _onBodyWriteCb = [this](const char* p, int64_t len) {
             if (_bodyFile.good())
                 _bodyFile.write(p, len);
             return _bodyFile.good() ? len : -1;
         };
     }
 
-    void saveBodyToHandler(IoFunc onBodyCb) { _onBodyCb = std::move(onBodyCb); }
+    void saveBodyToHandler(IoWriteFunc onBodyWriteCb) { _onBodyWriteCb = std::move(onBodyWriteCb); }
 
     void saveBodyToMemory()
     {
-        _onBodyCb = [this](const char* p, int64_t len) {
+        _onBodyWriteCb = [this](const char* p, int64_t len) {
             _body.insert(_body.end(), p, p + len);
             // std::cerr << "Body: " << len << "\n" << _body << std::endl;
             return len;
@@ -555,9 +567,9 @@ public:
 
         if (_parserStage == ParserStage::Body)
         {
-            std::cerr << "ParserStage::Body: " << available << "\n"
-                      << std::string(p, available) << std::endl;
-            const int64_t read = _onBodyCb(p, available);
+            // std::cerr << "ParserStage::Body: " << available << "\n"
+            //           << std::string(p, available) << std::endl;
+            const int64_t read = _onBodyWriteCb(p, available);
             if (read < 0)
             {
                 _state = State::Error;
@@ -609,7 +621,7 @@ private:
     int64_t _recvBodySize; //< The amount of data we received (compared to the Content-Length).
     std::string _body; //< Used when _bodyHandling is InMemory.
     std::ofstream _bodyFile; //< Used when _bodyHandling is OnDisk.
-    IoFunc _onBodyCb; //< Used to handling body receipt in all cases.
+    IoWriteFunc _onBodyWriteCb; //< Used to handling body receipt in all cases.
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -647,6 +659,7 @@ public:
         std::cerr << "asyncGet\n";
         _response.reset();
         _request = req;
+        _request.header().set("Host", host()); // Make sure the host is set.
 
         if (!_connected && connect())
         {
@@ -661,26 +674,26 @@ public:
 private:
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
-        std::cout << "onConnect\n";
+        std::cerr << "onConnect\n";
         LOG_TRC('#' << socket->getFD() << " Connected.");
         _connected = true;
     }
 
     void shutdown(bool /*goingAway*/, const std::string& /*statusMessage*/) override
     {
-        std::cout << "shutdown\n";
+        std::cerr << "shutdown\n";
     }
 
     void getIOStats(uint64_t& sent, uint64_t& recv) override
     {
-        std::cout << "getIOStats\n";
+        std::cerr << "getIOStats\n";
         _socket->getIOStats(sent, recv);
     }
 
     int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
                       int64_t& /*timeoutMaxMicroS*/) override
     {
-        std::cout << "getPollEvents\n";
+        std::cerr << "getPollEvents\n";
         int events = POLLIN;
         if (_request.stage() != Request::Stage::Finished)
             events |= POLLOUT;
@@ -689,7 +702,7 @@ private:
 
     virtual void handleIncomingMessage(SocketDisposition& disposition) override
     {
-        std::cout << "handleIncomingMessage\n";
+        std::cerr << "handleIncomingMessage\n";
 
         std::vector<char>& data = _socket->getInBuffer();
         const int64_t read = _response.readData(data.data(), data.size());
@@ -707,7 +720,7 @@ private:
 
     void performWrites() override
     {
-        std::cout << "performWrites\n";
+        std::cerr << "performWrites\n";
 
         Buffer& out = _socket->getOutBuffer();
         if (!_request.writeData(out))
@@ -716,13 +729,14 @@ private:
         }
         else if (!out.empty())
         {
+            std::cerr << "Sending\n" << std::string(out.getBlock(), out.size()) << std::endl;
             _socket->writeOutgoingData();
         }
     }
 
     void onDisconnect() override
     {
-        std::cout << "onDisconnect\n";
+        std::cerr << "onDisconnect\n";
         _connected = false;
     }
 

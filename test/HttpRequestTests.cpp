@@ -23,13 +23,15 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
 {
     CPPUNIT_TEST_SUITE(HttpRequestTests);
 
-    CPPUNIT_TEST(testSimpleGet);
-    CPPUNIT_TEST(test500GetStatuses);
+    // CPPUNIT_TEST(testSimpleGet);
+    // CPPUNIT_TEST(test500GetStatuses);
+    CPPUNIT_TEST(testSimplePost);
 
     CPPUNIT_TEST_SUITE_END();
 
     void testSimpleGet();
     void test500GetStatuses();
+    void testSimplePost();
 };
 
 static std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
@@ -159,6 +161,54 @@ void HttpRequestTests::test500GetStatuses()
             compare(pocoResponse.first, pocoResponse.second, httpResponse);
         }
     }
+
+    pollThread.joinThread();
+}
+
+void HttpRequestTests::testSimplePost()
+{
+    const std::string Host = "httpbin.org";
+    const char* URL = "/post";
+
+    // Start the polling thread.
+    SocketPoll pollThread("HttpSessionPoll");
+    pollThread.startThread();
+
+    http::Request httpRequest(URL, http::Request::VERB_POST);
+
+    const char data[] = "abcd-qwerty!!!";
+    httpRequest.setBodySource(
+        [&](char* buf, int64_t) -> int64_t {
+            static bool done = false;
+            if (!done)
+            {
+                done = true;
+                memcpy(buf, data, sizeof(data));
+                return sizeof(data);
+            }
+
+            return 0;
+        },
+        sizeof(data));
+
+    auto httpSession = http::Session::create(Host, 80, false);
+    httpSession->asyncGet(httpRequest, pollThread);
+
+    const http::Response& httpResponse = httpSession->response();
+
+    for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
+        usleep(100); // Wait some more.
+
+    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
+    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
+    LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
+    LOK_ASSERT(httpResponse.statusLine().statusCategory()
+               == http::StatusLine::StatusCodeClass::Successful);
+
+    const std::string body = httpResponse.getBody();
+    LOK_ASSERT(!body.empty());
+    std::cerr << "[" << body << "]\n";
 
     pollThread.joinThread();
 }
