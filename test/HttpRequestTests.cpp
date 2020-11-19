@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include <chrono>
 #include <config.h>
 
 #include <Poco/Net/HTTPClientSession.h>
@@ -24,13 +25,15 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
 {
     CPPUNIT_TEST_SUITE(HttpRequestTests);
 
-    // CPPUNIT_TEST(testSimpleGet);
+    CPPUNIT_TEST(testSimpleGet);
+    CPPUNIT_TEST(testSimpleGetSync);
     // CPPUNIT_TEST(test500GetStatuses);
-    CPPUNIT_TEST(testSimplePost);
+    // CPPUNIT_TEST(testSimplePost);
 
     CPPUNIT_TEST_SUITE_END();
 
     void testSimpleGet();
+    void testSimpleGetSync();
     void test500GetStatuses();
     void testSimplePost();
 };
@@ -52,8 +55,7 @@ static std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string
         std::ostringstream outputStringStream;
         Poco::StreamCopier::copyStream(rs, outputStringStream);
         responseString = outputStringStream.str();
-        // std::cout << responseString << std::endl;
-        // std::cout << "-----" << std::endl;
+        // std::cout << responseString << std::endl << "-----" << std::endl;
     }
 
     return std::make_pair(response, responseString);
@@ -70,9 +72,7 @@ void HttpRequestTests::testSimpleGet()
     SocketPoll pollThread("HttpSessionPoll");
     pollThread.startThread();
 
-    http::Request httpRequest;
-    httpRequest.setUrl(URL);
-    httpRequest.header().set("Host", Host);
+    http::Request httpRequest(URL);
 
     auto httpSession = http::Session::create(Host, 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
@@ -94,6 +94,35 @@ void HttpRequestTests::testSimpleGet()
     LOK_ASSERT_EQUAL(pocoResponse.second, body);
 
     pollThread.joinThread();
+}
+
+void HttpRequestTests::testSimpleGetSync()
+{
+    const char* Host = "www.example.com";
+    const char* URL = "/";
+
+    const auto pocoResponse = pocoGet(Host, URL);
+
+    http::Request httpRequest(URL);
+
+    constexpr std::chrono::milliseconds timeout(1000);
+
+    auto httpSession = http::Session::create(Host, 80, false);
+    LOK_ASSERT(httpSession->syncGet(httpRequest, timeout));
+    LOK_ASSERT(httpSession->syncGet(httpRequest, timeout)); // Second request.
+
+    const http::Response& httpResponse = httpSession->response();
+    LOK_ASSERT(httpResponse.done());
+    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
+    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
+    LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
+    LOK_ASSERT(httpResponse.statusLine().statusCategory()
+               == http::StatusLine::StatusCodeClass::Successful);
+
+    const std::string body = httpResponse.getBody();
+    LOK_ASSERT(!body.empty());
+    LOK_ASSERT_EQUAL(pocoResponse.second, body);
 }
 
 static void compare(const Poco::Net::HTTPResponse& pocoResponse, const std::string& pocoBody,
@@ -123,7 +152,6 @@ void HttpRequestTests::test500GetStatuses()
     const std::string host = "httpbin.org";
 
     http::Request httpRequest;
-    httpRequest.header().set("Host", host);
 
     auto httpSession = http::Session::create(host, 80, false);
     const http::Response& httpResponse = httpSession->response();

@@ -10,6 +10,7 @@
 #include <Poco/MemoryStream.h>
 #include <Poco/Net/HTTPResponse.h>
 
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <sstream>
@@ -687,6 +688,36 @@ public:
 
     const Response& response() const { return _response; }
 
+    bool syncGet(const Request& req, std::chrono::milliseconds timeoutMs)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeoutMs;
+
+        std::cerr << "syncGet\n";
+        _response.reset();
+        _request = req;
+        _request.header().set("Host", host()); // Make sure the host is set.
+
+        if (!_connected && !connect())
+            return false;
+
+        SocketPoll poller("HttpSessionPoll");
+
+        poller.insertNewSocket(_socket);
+        poller.poll(timeoutMs);
+        while (!_response.done())
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= deadline)
+                return false;
+
+            const auto remaining
+                = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now);
+            poller.poll(remaining);
+        }
+
+        return _response.state() == Response::State::Complete;
+    }
+
     void asyncGet(const Request& req, SocketPoll& poll)
     {
         std::cerr << "asyncGet\n";
@@ -696,7 +727,6 @@ public:
 
         if (!_connected && connect())
         {
-            _sendBufferSize = _socket->getSendBufferSize();
             std::cerr << "Connected\n";
             poll.insertNewSocket(_socket);
         }
@@ -785,7 +815,6 @@ private:
     const std::string _port;
     const bool _secure;
     std::shared_ptr<StreamSocket> _socket;
-    int _sendBufferSize;
     Request _request;
     Response _response;
     bool _connected;
