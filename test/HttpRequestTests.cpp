@@ -16,6 +16,7 @@
 #include <test/lokassert.hpp>
 
 #include <net/HttpRequest.hpp>
+#include <FileUtil.hpp>
 #include <Util.hpp>
 
 /// http::Request unit-tests.
@@ -176,20 +177,14 @@ void HttpRequestTests::testSimplePost()
 
     http::Request httpRequest(URL, http::Request::VERB_POST);
 
+    // Write the test data to file.
     const char data[] = "abcd-qwerty!!!";
-    httpRequest.setBodySource(
-        [&](char* buf, int64_t) -> int64_t {
-            static bool done = false;
-            if (!done)
-            {
-                done = true;
-                memcpy(buf, data, sizeof(data));
-                return sizeof(data);
-            }
+    const std::string path = FileUtil::getSysTempDirectoryPath() + "/test_http_post";
+    std::ofstream ofs(path, std::ios::binary);
+    ofs.write(data, sizeof(data) - 1); // Don't write the terminating null.
+    ofs.close();
 
-            return 0;
-        },
-        sizeof(data));
+    httpRequest.setBodyFile(path);
 
     auto httpSession = http::Session::create(Host, 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
@@ -209,6 +204,7 @@ void HttpRequestTests::testSimplePost()
     const std::string body = httpResponse.getBody();
     LOK_ASSERT(!body.empty());
     std::cerr << "[" << body << "]\n";
+    LOK_ASSERT(body.find(data) != std::string::npos);
 
     pollThread.joinThread();
 }

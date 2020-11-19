@@ -221,6 +221,24 @@ public:
         _bodyReaderCb = std::move(bodyReaderCb);
     }
 
+    /// Set the file to send as the body of the request.
+    void setBodyFile(const std::string& path)
+    {
+        //FIXME: use generalized lambda campture to move the ifstream, available in C++14.
+        auto ifs = std::make_shared<std::ifstream>(path, std::ios::binary);
+
+        ifs->seekg(0, std::ios_base::end);
+        const int64_t size = ifs->tellg();
+        ifs->seekg(0, std::ios_base::beg);
+
+        setBodySource(
+            [=](char* buf, int64_t len) -> int64_t {
+                ifs->read(buf, len);
+                return ifs->gcount();
+            },
+            size);
+    }
+
     Stage stage() const { return _stage; }
 
     bool writeData(Buffer& out)
