@@ -102,9 +102,24 @@ public:
         return 0;
     }
 
-    /// Set an HTTP header field.
+    /// Add an HTTP header field.
+    void add(const std::string& key, const std::string& value)
+    {
+        _headers.emplace_back(key, value);
+    }
+
+    /// Set an HTTP header field, replacing an earlier value, if exists.
     void set(const std::string& key, const std::string& value)
     {
+        for (auto& pair : _headers)
+        {
+            if (pair.first == key)
+            {
+                pair.second = value;
+                return;
+            }
+        }
+
         _headers.emplace_back(key, value);
     }
 
