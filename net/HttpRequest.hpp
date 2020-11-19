@@ -37,6 +37,12 @@ enum class FieldParseState
     Valid //< The field is both complete and valid.
 };
 
+/// The callback signature for handling IO data.
+/// Returns the number of bytes read/written,
+/// -1 for error (terminates the transfer).
+/// When reading from a source, returning 0 means EOF.
+using IoFunc = std::function<int64_t(const char*, int64_t)>;
+
 /// An HTTP Header.
 class Header
 {
@@ -191,13 +197,8 @@ public:
     Header& header() { return _header; }
     const Header& header() const { return _header; }
 
-    /// Callback to read the body into the request.
-    /// Returns the number of bytes written, 0 for end of body,
-    /// -1 for error (terminates the request).
-    using BodyReaderCb = std::function<int64_t(const char*, int64_t)>;
-
-    /// Set the request body. Meaningful for POST.
-    void setBodyReader(BodyReaderCb bodyReaderCb) { _bodyReaderCb = std::move(bodyReaderCb); }
+    /// Set the request body source. Meaningful for POST, to send some payload.
+    void setBodySource(IoFunc bodyReaderCb) { _bodyReaderCb = std::move(bodyReaderCb); }
 
     /// Read the body contents. Used to send the request.
     int64_t readBody(const char* data, int64_t len) { return _bodyReaderCb(data, len); }
@@ -207,7 +208,7 @@ private:
     std::string _url; //< The URL to request.
     std::string _verb; //< The verb of the request.
     std::string _version; //< The protocol version of the request.
-    BodyReaderCb _bodyReaderCb;
+    IoFunc _bodyReaderCb;
 };
 
 /// HTTP Status Line is the first line of a response sent by a server.
@@ -373,11 +374,6 @@ private:
 class Response final
 {
 public:
-    /// The callback signature for handling body data.
-    /// Receives a vector with the data, returns the number of bytes consumed.
-    /// Returning -1 will terminate the connection.
-    using OnData = std::function<int64_t(const char* p, int64_t len)>;
-
     Response()
         : _state(State::New)
         , _parserStage(ParserStage::StatusLine)
@@ -419,18 +415,18 @@ public:
     void saveBodyToFile(const std::string& path)
     {
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
-        _onDataCb = [this](const char* p, int64_t len) {
+        _onBodyCb = [this](const char* p, int64_t len) {
             if (_bodyFile.good())
                 _bodyFile.write(p, len);
             return _bodyFile.good() ? len : -1;
         };
     }
 
-    void setOnBodyReceiptHandler(OnData onDataCb) { _onDataCb = std::move(onDataCb); }
+    void saveBodyToHandler(IoFunc onBodyCb) { _onBodyCb = std::move(onBodyCb); }
 
     void saveBodyToMemory()
     {
-        _onDataCb = [this](const char* p, int64_t len) {
+        _onBodyCb = [this](const char* p, int64_t len) {
             _body.insert(_body.end(), p, p + len);
             // std::cerr << "Body: " << len << "\n" << _body << std::endl;
             return len;
@@ -516,7 +512,7 @@ public:
         {
             std::cerr << "ParserStage::Body: " << available << "\n"
                       << std::string(p, available) << std::endl;
-            const int64_t read = _onDataCb(p, available);
+            const int64_t read = _onBodyCb(p, available);
             if (read < 0)
             {
                 _state = State::Error;
@@ -568,7 +564,7 @@ private:
     int64_t _recvBodySize; //< The amount of data we received (compared to the Content-Length).
     std::string _body; //< Used when _bodyHandling is InMemory.
     std::ofstream _bodyFile; //< Used when _bodyHandling is OnDisk.
-    OnData _onDataCb; //< Used to handling body receipt in all cases.
+    IoFunc _onBodyCb; //< Used to handling body receipt in all cases.
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -628,6 +624,7 @@ public:
             poll.wakeupWorld();
     }
 
+private:
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
         std::cout << "onConnect\n";
@@ -646,6 +643,16 @@ public:
         _socket->getIOStats(sent, recv);
     }
 
+    int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
+                      int64_t& /*timeoutMaxMicroS*/) override
+    {
+        std::cout << "getPollEvents\n";
+        int events = POLLIN;
+        if (_sendStage != Stage::Finished)
+            events |= POLLOUT;
+        return events;
+    }
+
     virtual void handleIncomingMessage(SocketDisposition& disposition) override
     {
         std::cout << "handleIncomingMessage\n";
@@ -662,16 +669,6 @@ public:
             // Interrupt the transfer.
             disposition.setClosed();
         }
-    }
-
-    int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
-                      int64_t& /*timeoutMaxMicroS*/) override
-    {
-        std::cout << "getPollEvents\n";
-        int events = POLLIN;
-        if (_sendStage != Stage::Finished)
-            events |= POLLOUT;
-        return events;
     }
 
     void performWrites() override
@@ -694,6 +691,7 @@ public:
             _socket->writeOutgoingData();
         }
 
+        if (_sendStage == Stage::Body)
         {
             char buffer[16 * 1024];
             const int64_t read = _request.readBody(buffer, sizeof(buffer));
@@ -722,7 +720,6 @@ public:
 
     bool connect();
 
-private:
     /// Do we need to handle a timeout ?
     void checkTimeout(std::chrono::steady_clock::time_point) override {}
     int sendTextMessage(const char*, const size_t, bool) const override { return 0; }
