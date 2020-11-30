@@ -1078,18 +1078,44 @@ void DocumentBroker::saveToStorageInternal(const std::string& sessionId, bool su
         return;
     }
 
-    LOG_DBG("Persisting [" << _docKey << "] after saving to URI [" << uriAnonym << "].");
+    LOG_DBG("Uploading [" << _docKey << "] after saving to URI [" << uriAnonym << "].");
 
-    assert(_storage && _tileCache);
-    const StorageBase::UploadResult storageSaveResult = _storage->uploadLocalFileToStorage(
+    assert(_storage);
+    const StorageBase::AsyncUpload asyncUp = _storage->uploadLocalFileToStorageAsync(
         auth, it->second->getCookies(), *_lockCtx, saveAsPath, saveAsFilename, isRename);
 
-    const StorageUploadDetails details { uriAnonym, newFileModifiedTime, it->second, isSaveAs, isRename };
+    switch (asyncUp.state())
+    {
+        case StorageBase::AsyncUpload::State::Running:
+            LOG_DBG("Async upload of [" << _docKey << "] is in progress.");
+            return;
+
+        case StorageBase::AsyncUpload::State::Success:
+        {
+            LOG_DBG("Successfully uploaded [" << _docKey << "], processing results.");
+            const StorageBase::UploadResult& storageSaveResult = asyncUp.result();
+            const StorageUploadDetails details{ uriAnonym, newFileModifiedTime, it->second,
+                                                isSaveAs, isRename };
+            return handleUploadToStorageResponse(details, storageSaveResult);
+        }
+
+        case StorageBase::AsyncUpload::State::None: // Unexpected: fallback.
+        case StorageBase::AsyncUpload::State::Error:
+        default:
+            break;
+    }
+
+    LOG_ERR("Failed to upload [" << _docKey
+                                 << "] asynchronously, will fallback to synchronous uploading.");
+    const StorageBase::UploadResult& storageSaveResult = _storage->uploadLocalFileToStorage(
+        auth, it->second->getCookies(), *_lockCtx, saveAsPath, saveAsFilename, isRename);
+    const StorageUploadDetails details{ uriAnonym, newFileModifiedTime, it->second, isSaveAs,
+                                        isRename };
     handleUploadToStorageResponse(details, storageSaveResult);
 }
 
-void DocumentBroker::handleUploadToStorageResponse(
-    const StorageUploadDetails& details, const StorageBase::UploadResult& storageSaveResult)
+void DocumentBroker::handleUploadToStorageResponse(const StorageUploadDetails& details,
+                                                   const StorageBase::UploadResult& storageSaveResult)
 {
     // Storage save is considered successful when either storage returns OK or the document on the storage
     // was changed and it was used to overwrite local changes
@@ -1183,7 +1209,6 @@ void DocumentBroker::handleUploadToStorageResponse(
         {
             sessionIt.second->sendTextFrameAndLogError("error: cmd=storage kind=savediskfull");
         }
-
         broadcastSaveResult(false, "Disk full", storageSaveResult.getErrorMsg());
     }
     else if (storageSaveResult.getResult() == StorageBase::UploadResult::Result::UNAUTHORIZED)
@@ -1368,7 +1393,6 @@ bool DocumentBroker::autoSave(const bool force, const bool dontSaveIfUnmodified)
         {
             save = true;
         }
-
         if (save)
         {
             LOG_TRC("Sending timed save command for [" << _docKey << "].");
@@ -2494,12 +2518,12 @@ bool ConvertToBroker::startConversion(SocketDisposition &disposition, const std:
             // First add and load the session.
             docBroker->addSession(docBroker->_clientSession);
 
-            // Load the document manually and request saving in the target format.
-            std::string encodedFrom;
-            Poco::URI::encode(docBroker->getPublicUri().getPath(), "", encodedFrom);
-            const std::string _load = "load url=" + encodedFrom;
-            std::vector<char> loadRequest(_load.begin(), _load.end());
-            docBroker->_clientSession->handleMessage(loadRequest);
+                     // Load the document manually and request saving in the target format.
+                     std::string encodedFrom;
+                     Poco::URI::encode(docBroker->getPublicUri().getPath(), "", encodedFrom);
+                     const std::string _load = "load url=" + encodedFrom;
+                     std::vector<char> loadRequest(_load.begin(), _load.end());
+                     docBroker->_clientSession->handleMessage(loadRequest);
 
             // Save is done in the setLoaded
         });
