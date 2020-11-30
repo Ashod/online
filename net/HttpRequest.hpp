@@ -38,8 +38,8 @@ enum class FieldParseState
     Valid //< The field is both complete and valid.
 };
 
-/// The callback signature for handling IO data.
-/// Returns the number of bytes read/written,
+/// The callback signature for handling IO writes.
+/// Returns the number of bytes read from the buffer,
 /// -1 for error (terminates the transfer).
 /// The second argument is the data size in the buffer.
 using IoWriteFunc = std::function<int64_t(const char*, int64_t)>;
@@ -792,7 +792,8 @@ private:
         }
         else if (!out.empty())
         {
-            std::cerr << "Sending\n" << std::string(out.getBlock(), out.size()) << std::endl;
+            std::cerr << "Sending\n"
+                      << std::string(out.getBlock(), out.getBlockSize()) << std::endl;
             _socket->writeOutgoingData();
         }
     }
