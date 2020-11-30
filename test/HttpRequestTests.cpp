@@ -27,8 +27,8 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
 
     CPPUNIT_TEST(testSimpleGet);
     CPPUNIT_TEST(testSimpleGetSync);
-    // CPPUNIT_TEST(test500GetStatuses);
-    // CPPUNIT_TEST(testSimplePost);
+    CPPUNIT_TEST(test500GetStatuses);
+    CPPUNIT_TEST(testSimplePost);
 
     CPPUNIT_TEST_SUITE_END();
 
@@ -77,19 +77,19 @@ void HttpRequestTests::testSimpleGet()
     auto httpSession = http::Session::create(Host, 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
 
-    const http::Response& httpResponse = httpSession->response();
+    const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
-    for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
+    for (int i = 0; i < 10000 && !httpResponse->done(); ++i)
         usleep(100); // Wait some more.
 
-    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
-    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
-    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
-    LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
-    LOK_ASSERT(httpResponse.statusLine().statusCategory()
+    LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+    LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
+    LOK_ASSERT(httpResponse->statusLine().statusCode() == 200);
+    LOK_ASSERT(httpResponse->statusLine().statusCategory()
                == http::StatusLine::StatusCodeClass::Successful);
 
-    const std::string body = httpResponse.getBody();
+    const std::string body = httpResponse->getBody();
     LOK_ASSERT(!body.empty());
     LOK_ASSERT_EQUAL(pocoResponse.second, body);
 
@@ -111,16 +111,16 @@ void HttpRequestTests::testSimpleGetSync()
     LOK_ASSERT(httpSession->syncGet(httpRequest, timeout));
     LOK_ASSERT(httpSession->syncGet(httpRequest, timeout)); // Second request.
 
-    const http::Response& httpResponse = httpSession->response();
-    LOK_ASSERT(httpResponse.done());
-    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
-    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
-    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
-    LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
-    LOK_ASSERT(httpResponse.statusLine().statusCategory()
+    const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+    LOK_ASSERT(httpResponse->done());
+    LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+    LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
+    LOK_ASSERT(httpResponse->statusLine().statusCode() == 200);
+    LOK_ASSERT(httpResponse->statusLine().statusCategory()
                == http::StatusLine::StatusCodeClass::Successful);
 
-    const std::string body = httpResponse.getBody();
+    const std::string body = httpResponse->getBody();
     LOK_ASSERT(!body.empty());
     LOK_ASSERT_EQUAL(pocoResponse.second, body);
 }
@@ -154,7 +154,6 @@ void HttpRequestTests::test500GetStatuses()
     http::Request httpRequest;
 
     auto httpSession = http::Session::create(host, 80, false);
-    const http::Response& httpResponse = httpSession->response();
 
     http::StatusLine::StatusCodeClass statusCodeClasses[]
         = { http::StatusLine::StatusCodeClass::Informational,
@@ -168,26 +167,27 @@ void HttpRequestTests::test500GetStatuses()
         const std::string url = "/status/" + std::to_string(statusCode);
         httpRequest.setUrl(url);
         httpSession->asyncGet(httpRequest, pollThread);
+        const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
-        for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
+        for (int i = 0; i < 10000 && !httpResponse->done(); ++i)
             usleep(100); // Wait some more.
 
-        LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
-        LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
-        LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
+        LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+        LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
+        LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
 
         if (statusCode % 100 == 0)
             ++curStatusCodeClass;
-        LOK_ASSERT(httpResponse.statusLine().statusCategory()
+        LOK_ASSERT(httpResponse->statusLine().statusCategory()
                    == statusCodeClasses[curStatusCodeClass]);
 
-        LOK_ASSERT(httpResponse.statusLine().statusCode() == statusCode);
+        LOK_ASSERT(httpResponse->statusLine().statusCode() == statusCode);
 
-        if (httpResponse.statusLine().statusCategory()
+        if (httpResponse->statusLine().statusCategory()
             != http::StatusLine::StatusCodeClass::Informational)
         {
             const auto pocoResponse = pocoGet(host, url); // Get via Poco in parallel.
-            compare(pocoResponse.first, pocoResponse.second, httpResponse);
+            compare(pocoResponse.first, pocoResponse.second, *httpResponse.get());
         }
     }
 
@@ -217,19 +217,19 @@ void HttpRequestTests::testSimplePost()
     auto httpSession = http::Session::create(Host, 80, false);
     httpSession->asyncGet(httpRequest, pollThread);
 
-    const http::Response& httpResponse = httpSession->response();
+    std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
-    for (int i = 0; i < 10000 && !httpResponse.done(); ++i)
+    for (int i = 0; i < 10000 && !httpResponse->done(); ++i)
         usleep(100); // Wait some more.
 
-    LOK_ASSERT(httpResponse.state() == http::Response::State::Complete);
-    LOK_ASSERT(!httpResponse.statusLine().httpVersion().empty());
-    LOK_ASSERT(!httpResponse.statusLine().reasonPhrase().empty());
-    LOK_ASSERT(httpResponse.statusLine().statusCode() == 200);
-    LOK_ASSERT(httpResponse.statusLine().statusCategory()
+    LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+    LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
+    LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
+    LOK_ASSERT(httpResponse->statusLine().statusCode() == 200);
+    LOK_ASSERT(httpResponse->statusLine().statusCategory()
                == http::StatusLine::StatusCodeClass::Successful);
 
-    const std::string body = httpResponse.getBody();
+    const std::string body = httpResponse->getBody();
     LOK_ASSERT(!body.empty());
     std::cerr << "[" << body << "]\n";
     LOK_ASSERT(body.find(data) != std::string::npos);

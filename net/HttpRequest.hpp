@@ -462,6 +462,7 @@ private:
     std::string _reasonPhrase; //< A client SHOULD ignore the reason-phrase content.
 };
 
+/// The response for an HTTP request.
 class Response final
 {
 public:
@@ -472,16 +473,6 @@ public:
     {
         // By default we store the body in memory.
         saveBodyToMemory();
-    }
-
-    void reset()
-    {
-        _state = State::New;
-        _parserStage = ParserStage::StatusLine;
-        _recvBodySize = 0;
-        _body.clear();
-        _statusLine = StatusLine();
-        _header = Header();
     }
 
     /// The state of the response.
@@ -686,14 +677,14 @@ public:
     const std::string& port() const { return _port; }
     bool secure() const { return _secure; }
 
-    const Response& response() const { return _response; }
+    std::shared_ptr<const Response> response() const { return _response; }
 
     bool syncGet(const Request& req, std::chrono::milliseconds timeoutMs)
     {
         const auto deadline = std::chrono::steady_clock::now() + timeoutMs;
 
         std::cerr << "syncGet\n";
-        _response.reset();
+        _response.reset(new Response);
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
 
@@ -704,7 +695,7 @@ public:
 
         poller.insertNewSocket(_socket);
         poller.poll(timeoutMs);
-        while (!_response.done())
+        while (!_response->done())
         {
             const auto now = std::chrono::steady_clock::now();
             if (now >= deadline)
@@ -715,13 +706,13 @@ public:
             poller.poll(remaining);
         }
 
-        return _response.state() == Response::State::Complete;
+        return _response->state() == Response::State::Complete;
     }
 
     void asyncGet(const Request& req, SocketPoll& poll)
     {
         std::cerr << "asyncGet\n";
-        _response.reset();
+        _response.reset(new Response);
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
 
@@ -768,13 +759,13 @@ private:
         std::cerr << "handleIncomingMessage\n";
 
         std::vector<char>& data = _socket->getInBuffer();
-        const int64_t read = _response.readData(data.data(), data.size());
+        const int64_t read = _response->readData(data.data(), data.size());
         if (read > 0)
         {
             // Remove consumed data.
             data.erase(data.begin(), data.begin() + read);
         }
-        else if (read < 0 || _response.done())
+        else if (read < 0 || _response->done())
         {
             // Interrupt the transfer.
             disposition.setClosed();
@@ -817,7 +808,7 @@ private:
     const bool _secure;
     std::shared_ptr<StreamSocket> _socket;
     Request _request;
-    Response _response;
+    std::shared_ptr<Response> _response;
     bool _connected;
 };
 
