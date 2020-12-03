@@ -33,6 +33,55 @@ class HTTPClientSession;
 
 } // namespace Poco
 
+/// The document data state.
+/// This is used to manage the bits of the document.
+/// There are three locations to track: the storage (wopi host),
+/// the local file on disk (in jail), and in memory (in core).
+/// We download the document from storage to disk, then
+/// we load it in memory. From then on, we track the
+/// state after modification (in memory), saving (to disk),
+/// and uploading (to storage).
+
+/// Storage -> Local
+/// Local -> Core
+/// Core -> Local
+/// Local -> Storage
+enum class DocumentDataStatus
+{
+    New,        //< Doesn't exist, pending downloading.
+    Downloading,   //< Download from Storage to disk. Synchronous.
+    Loading,    //< Loading the document in Core.
+    Unmodified, //< Loaded and unmodified.
+    Modified,   //< Modified and needs saving (local and storage outdated).
+    Saving,     //< Saving the document in Core.
+    Saved,      //< Local file up-to-date, Storage outdated.
+    Uploading,  //< Uploading to storage.
+
+};
+
+// | State       | Storage | Local   | Core    |
+// |-------------|---------|---------|---------|
+// | Downloading | Reading | Writing | Idle    |
+// | Loading     | Idle    | Reading | Writing |
+// | Saving      | Idle    | Writing | Reading |
+// | Uploading   | Writing | Reading | Idle    |
+class DataState
+{
+public:
+    enum class Activity
+    {
+        Idle,
+        Reading,
+        Writing
+    };
+
+private:
+
+    std::chrono::steady_clock::time_point _lastModifyTime;
+    Activity _activity;
+};
+
+
 /// Represents whether the underlying file is locked
 /// and with what token.
 struct LockContext
