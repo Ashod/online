@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 
 #include <Poco/URI.h>
 
@@ -354,17 +355,7 @@ private:
                                const std::string& saveAsFilename = std::string(),
                                const bool isRename = false, const bool force = false);
 
-    struct StorageUploadDetails
-    {
-        const std::string uriAnonym;
-        const std::chrono::system_clock::time_point newFileModifiedTime;
-        const std::weak_ptr<class ClientSession> session;
-        const bool isSaveAs;
-        const bool isRename;
-    };
-
-    void handleUploadToStorageResponse(const StorageUploadDetails& details,
-                                       const StorageBase::UploadResult& storageSaveResult);
+    void handleUploadToStorageResponse(const StorageBase::UploadResult& storageSaveResult);
 
     /**
      * Report back the save result to PostMessage users (Action_Save_Resp)
@@ -413,6 +404,40 @@ private:
     /// a convert-to request or doctored to look like one.
     virtual bool isConvertTo() const { return false; }
 
+    /// Represents an upload request.
+    class UploadRequest final
+    {
+    public:
+        UploadRequest(std::string uriAnonym,
+                      std::chrono::system_clock::time_point newFileModifiedTime,
+                      const std::shared_ptr<class ClientSession>& session, bool isSaveAs,
+                      bool isRename)
+            : _uriAnonym(std::move(uriAnonym))
+            , _newFileModifiedTime(newFileModifiedTime)
+            , _session(session)
+            , _isSaveAs(isSaveAs)
+            , _isRename(isRename)
+        {
+        }
+
+        const std::string& uriAnonym() const { return _uriAnonym; }
+        const std::chrono::system_clock::time_point& newFileModifiedTime() const
+        {
+            return _newFileModifiedTime;
+        }
+
+        std::shared_ptr<class ClientSession> session() const { return _session.lock(); }
+        bool isSaveAs() const { return _isSaveAs; }
+        bool isRename() const { return _isRename; }
+
+    private:
+        const std::string _uriAnonym;
+        const std::chrono::system_clock::time_point _newFileModifiedTime;
+        const std::weak_ptr<class ClientSession> _session;
+        const bool _isSaveAs;
+        const bool _isRename;
+    };
+
 protected:
     /// Seconds to live for, or 0 forever
     std::chrono::seconds _limitLifeSeconds;
@@ -438,6 +463,10 @@ private:
 
     /// Indicates whether the last saveToStorage operation was successful.
     bool _lastStorageSaveSuccessful;
+
+    /// The current upload request, if any.
+    /// For now we can only have one at a time.
+    std::unique_ptr<UploadRequest> _uploadRequest;
 
     /// The last time we tried saving, regardless of whether the
     /// document was modified and saved or not.
