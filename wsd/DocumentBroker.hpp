@@ -368,13 +368,13 @@ private:
     /// Broadcasts to all sessions the last modification time of the document.
     void broadcastLastModificationTime(const std::shared_ptr<ClientSession>& session = nullptr) const;
 
-    /// True iff a save is in progress (requested but not completed).
-    bool isSaving() const { return _lastSaveResponseTime < _lastSaveRequestTime; }
-
     /// True if we know the doc is modified or
     /// if there has been activity from a client after we last *requested* saving,
     /// since there are race conditions vis-a-vis user activity while saving.
-    bool isPossiblyModified() const { return isModified() || (_lastSaveRequestTime < _lastActivityTime); }
+    bool isPossiblyModified() const
+    {
+        return isModified() || (_saveManager.lastSaveRequestTime() < _lastActivityTime);
+    }
 
     /// True iff there is at least one non-readonly session other than the given.
     /// Since only editable sessions can save, we need to use the last to
@@ -410,7 +410,9 @@ private:
     public:
         SaveManager()
             : _isAutosaveEnabled(std::getenv("LOOL_NO_AUTOSAVE") == nullptr)
-            , _lastAutosaveCheckTime(std::chrono::steady_clock::now())
+            , _lastAutosaveCheckTime(now())
+            , _lastSaveRequestTime(now())
+            , _lastSaveResponseTime(now())
         {
         }
 
@@ -429,14 +431,63 @@ private:
         /// Marks autosave check done.
         void autosaveChecked() { _lastAutosaveCheckTime = now(); }
 
+        /// How much time passed since the last save request.
+        const std::chrono::milliseconds timeSinceLastSaveRequest() const
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - _lastSaveRequestTime);
+        }
+
+        /// Marks the last save request as now.
+        void markLastSaveRequestTime() { _lastSaveRequestTime = now(); }
+
+        /// Returns the last save request time.
+        /// TODO: Remove: temporary for logging only.
+        std::chrono::steady_clock::time_point lastSaveRequestTime() const
+        {
+            return _lastSaveRequestTime;
+        }
+
+        /// Marks the last save response as now.
+        void markLastSaveResponseTime() { _lastSaveResponseTime = now(); }
+
+        /// Returns the last save response time.
+        /// TODO: Remove: temporary for logging only.
+        std::chrono::steady_clock::time_point lastSaveResponseTime() const
+        {
+            return _lastSaveResponseTime;
+        }
+
+        /// True iff a save is in progress (requested but not completed).
+        bool isSaving() const { return _lastSaveResponseTime < _lastSaveRequestTime; }
+
+        /// True iff the last save request has timed out.
+        bool hasSavingTimedOut() const
+        {
+            return isSaving()
+                   && std::chrono::duration_cast<std::chrono::milliseconds>(now()
+                                                                            - _lastSaveRequestTime)
+                          >= std::chrono::milliseconds(COMMAND_TIMEOUT_MS);
+        }
+
+    private:
+        /// Helper to get the current time.
         static std::chrono::steady_clock::time_point now()
         {
             return std::chrono::steady_clock::now();
         }
 
-    private:
+        /// Whether or not autosave is enabled.
         const bool _isAutosaveEnabled;
+
+        /// The last autosave check time.
         std::chrono::steady_clock::time_point _lastAutosaveCheckTime;
+
+        /// The last time we sent a save request to lokit.
+        std::chrono::steady_clock::time_point _lastSaveRequestTime;
+
+        /// The last time we received a response for a save request from lokit.
+        std::chrono::steady_clock::time_point _lastSaveResponseTime;
     };
 
     /// Represents an upload request.
@@ -516,12 +567,6 @@ private:
     /// The last time we tried saving, regardless of whether the
     /// document was modified and saved or not.
     std::chrono::steady_clock::time_point _lastSaveTime;
-
-    /// The last time we sent a save request to lokit.
-    std::chrono::steady_clock::time_point _lastSaveRequestTime;
-
-    /// The last time we received a response for a save request from lokit.
-    std::chrono::steady_clock::time_point _lastSaveResponseTime;
 
     /// The document's last-modified time on storage.
     std::chrono::system_clock::time_point _documentLastModifiedTime;
