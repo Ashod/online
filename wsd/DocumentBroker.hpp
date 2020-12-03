@@ -412,12 +412,19 @@ private:
                       std::chrono::system_clock::time_point newFileModifiedTime,
                       const std::shared_ptr<class ClientSession>& session, bool isSaveAs,
                       bool isRename)
-            : _uriAnonym(std::move(uriAnonym))
+            : _startTime(std::chrono::steady_clock::now())
+            , _uriAnonym(std::move(uriAnonym))
             , _newFileModifiedTime(newFileModifiedTime)
             , _session(session)
             , _isSaveAs(isSaveAs)
             , _isRename(isRename)
         {
+        }
+
+        const std::chrono::milliseconds timeSinceRequest() const
+        {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now() - _startTime);
         }
 
         const std::string& uriAnonym() const { return _uriAnonym; }
@@ -431,6 +438,7 @@ private:
         bool isRename() const { return _isRename; }
 
     private:
+        const std::chrono::steady_clock::time_point _startTime; //< The time we made the request.
         const std::string _uriAnonym;
         const std::chrono::system_clock::time_point _newFileModifiedTime;
         const std::weak_ptr<class ClientSession> _session;
