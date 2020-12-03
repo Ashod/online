@@ -404,6 +404,41 @@ private:
     /// a convert-to request or doctored to look like one.
     virtual bool isConvertTo() const { return false; }
 
+    /// Responsible for managing document saving and storage.
+    class SaveManager
+    {
+    public:
+        SaveManager()
+            : _isAutosaveEnabled(std::getenv("LOOL_NO_AUTOSAVE") == nullptr)
+            , _lastAutosaveCheckTime(std::chrono::steady_clock::now())
+        {
+        }
+
+        /// Return true iff auto save is enabled.
+        bool isAutosaveEnabled() const { return _isAutosaveEnabled; }
+
+        /// Returns true if we should issue an auto-save.
+        bool needAutosaveCheck() const
+        {
+            return isAutosaveEnabled()
+                   && std::chrono::duration_cast<std::chrono::seconds>(now()
+                                                                       - _lastAutosaveCheckTime)
+                          >= std::chrono::seconds(30);
+        }
+
+        /// Marks autosave check done.
+        void autosaveChecked() { _lastAutosaveCheckTime = now(); }
+
+        static std::chrono::steady_clock::time_point now()
+        {
+            return std::chrono::steady_clock::now();
+        }
+
+    private:
+        const bool _isAutosaveEnabled;
+        std::chrono::steady_clock::time_point _lastAutosaveCheckTime;
+    };
+
     /// Represents an upload request.
     class UploadRequest final
     {
@@ -471,6 +506,8 @@ private:
 
     /// Indicates whether the last saveToStorage operation was successful.
     bool _lastStorageSaveSuccessful;
+
+    SaveManager _saveManager;
 
     /// The current upload request, if any.
     /// For now we can only have one at a time.
