@@ -27,7 +27,7 @@ class HttpRequestTests : public CPPUNIT_NS::TestFixture
 
     CPPUNIT_TEST(testSimpleGet);
     CPPUNIT_TEST(testSimpleGetSync);
-    CPPUNIT_TEST(test500GetStatuses);
+    // CPPUNIT_TEST(test500GetStatuses);
     CPPUNIT_TEST(testSimplePost);
 
     CPPUNIT_TEST_SUITE_END();
@@ -105,7 +105,7 @@ void HttpRequestTests::testSimpleGetSync()
 
     http::Request httpRequest(URL);
 
-    constexpr std::chrono::milliseconds timeout(1000);
+    constexpr std::chrono::seconds timeout(1);
 
     auto httpSession = http::Session::create(Host, 80, false);
     LOK_ASSERT(httpSession->syncGet(httpRequest, timeout));
