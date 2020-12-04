@@ -75,7 +75,7 @@ void HttpRequestTests::testSimpleGet()
     http::Request httpRequest(URL);
 
     auto httpSession = http::Session::create(Host, 80, false);
-    httpSession->asyncGet(httpRequest, pollThread);
+    httpSession->asyncRequest(httpRequest, pollThread);
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
@@ -108,8 +108,8 @@ void HttpRequestTests::testSimpleGetSync()
     constexpr std::chrono::seconds timeout(1);
 
     auto httpSession = http::Session::create(Host, 80, false);
-    LOK_ASSERT(httpSession->syncGet(httpRequest, timeout));
-    LOK_ASSERT(httpSession->syncGet(httpRequest, timeout)); // Second request.
+    LOK_ASSERT(httpSession->syncRequest(httpRequest, timeout));
+    LOK_ASSERT(httpSession->syncRequest(httpRequest, timeout)); // Second request.
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
     LOK_ASSERT(httpResponse->done());
@@ -166,7 +166,7 @@ void HttpRequestTests::test500GetStatuses()
     {
         const std::string url = "/status/" + std::to_string(statusCode);
         httpRequest.setUrl(url);
-        httpSession->asyncGet(httpRequest, pollThread);
+        httpSession->asyncRequest(httpRequest, pollThread);
         const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
         for (int i = 0; i < 10000 && !httpResponse->done(); ++i)
@@ -215,7 +215,7 @@ void HttpRequestTests::testSimplePost()
     httpRequest.setBodyFile(path);
 
     auto httpSession = http::Session::create(Host, 80, false);
-    httpSession->asyncGet(httpRequest, pollThread);
+    httpSession->asyncRequest(httpRequest, pollThread);
 
     std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 

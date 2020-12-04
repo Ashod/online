@@ -679,11 +679,11 @@ public:
 
     std::shared_ptr<const Response> response() const { return _response; }
 
-    bool syncGet(const Request& req, std::chrono::milliseconds timeoutMs)
+    bool syncRequest(const Request& req, const std::chrono::microseconds timeoutUs)
     {
-        const auto deadline = std::chrono::steady_clock::now() + timeoutMs;
+        const auto deadline = std::chrono::steady_clock::now() + timeoutUs;
 
-        std::cerr << "syncGet\n";
+        std::cerr << "syncRequest\n";
         _response.reset(new Response);
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
@@ -694,7 +694,7 @@ public:
         SocketPoll poller("HttpSessionPoll");
 
         poller.insertNewSocket(_socket);
-        poller.poll(timeoutMs);
+        poller.poll(timeoutUs);
         while (!_response->done())
         {
             const auto now = std::chrono::steady_clock::now();
@@ -709,9 +709,9 @@ public:
         return _response->state() == Response::State::Complete;
     }
 
-    void asyncGet(const Request& req, SocketPoll& poll)
+    void asyncRequest(const Request& req, SocketPoll& poll)
     {
-        std::cerr << "asyncGet\n";
+        std::cerr << "asyncRequest\n";
         _response.reset(new Response);
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
