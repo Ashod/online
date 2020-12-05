@@ -51,12 +51,58 @@ using IoWriteFunc = std::function<int64_t(const char*, int64_t)>;
 /// The second argument is the buffer size.
 using IoReadFunc = std::function<int64_t(char*, int64_t)>;
 
+/// Skips over space and tab characters starting at off.
+/// Returns the offset of the first match, otherwise, len.
+/// FIXME: Technically, we should skip: SP, HTAB, VT (%x0B),
+///         FF (%x0C), or bare CR.
+static inline int64_t skipSpaceAndTab(const char* p, int64_t off, int64_t len)
+{
+    for (; off < len; ++off)
+    {
+        if (p[off] != ' ' && p[off] != '\t')
+            return off;
+    }
+
+    return len;
+}
+
+static inline int64_t skipCRLF(const char* p, int64_t len, int64_t off = 0)
+{
+    for (; off < len; ++off)
+    {
+        if (p[off] != '\r' && p[off] != '\n')
+            return off;
+    }
+
+    return len;
+}
+
+/// Skip the current line, including line-break(s)
+/// until the start of a new line.
+/// Returns the offiset to the first character
+/// of the new line, otherwise, len.
+/// Note: if the new line is empty, it will not skip it.
+/// I.e., for [xxxCRLFCRLF] the offset to the second CR is returned.
+static inline int64_t skipToNewLine(const char* p, int64_t len, int64_t off = 0)
+{
+    // Find the line break, which ends the status line.
+    for (; off < len; ++off)
+    {
+        // We expect CRLF, but LF alone is enough.
+        if (p[off] == '\n')
+            return off + 1;
+    }
+
+    return len;
+}
+
 /// An HTTP Header.
 class Header
 {
 public:
     static constexpr const char* CONTENT_TYPE = "Content-Type";
     static constexpr const char* CONTENT_LENGTH = "Content-Length";
+    static constexpr const char* TRANSFER_ENCODING = "Transfer-Encoding";
 
     static constexpr int64_t MaxNumberFields = 128; // Arbitrary large number.
     static constexpr int64_t MaxNameLen = 512;
@@ -82,15 +128,24 @@ public:
 
     int64_t parse(const char* p, int64_t len)
     {
+        std::cerr << "Reading header given " << len
+                  << " bytes: " << std::string(p, std::min(len, 80L)) << std::endl;
         try
         {
             Poco::MemoryInputStream data(p, len);
 
             Poco::Net::HTTPResponse response;
             response.read(data);
+            for (const auto& pair : response)
+            {
+                set(pair.first, pair.second);
+            }
+
             if (response.hasContentLength())
                 setContentLength(response.getContentLength());
             setContentType(response.getContentType());
+            _chunked = response.getChunkedTransferEncoding();
+
             std::cerr << "Read " << data.tellg() << " bytes of header:" << std::endl;
             std::cerr << std::string(p, data.tellg()) << std::endl;
             return data.tellg();
@@ -160,6 +215,11 @@ public:
     /// Returns true iff a Content-Length header exists.
     bool hasContentLength() const { return has(CONTENT_LENGTH); }
 
+    /// Get the Transfer-Encoding header, if any.
+    std::string getTransferEncoding() const { return get(TRANSFER_ENCODING); }
+
+    bool getChunkedTransferEncoding() const { return _chunked; }
+
     /// Serialize the header to an output stream.
     template <typename T> T& serialize(T& os) const
     {
@@ -182,6 +242,7 @@ private:
     /// This isn't designed for lookup performance, but to preserve order.
     //TODO: We might not need this and get away with a map.
     Container _headers;
+    bool _chunked = false;
 };
 
 /// An HTTP Request made over Session.
@@ -352,20 +413,6 @@ public:
         return StatusCodeClass::Invalid;
     }
 
-    /// Skips over space and tab characters starting at off.
-    /// Returns the offset of the first match, otherwise, len.
-    /// Technically, we should skip: SP, HTAB, VT (%x0B), FF (%x0C), or bare CR.
-    int64_t skipSpaceAndTab(const char* p, int64_t off, int64_t len)
-    {
-        for (; off < len; ++off)
-        {
-            if (p[off] != ' ' && p[off] != '\t')
-                return off;
-        }
-
-        return len;
-    }
-
     /// Parses a Status Line.
     /// Returns the state and clobbers the len on succcess to the number of bytes read.
     FieldParseState parse(const char* p, int64_t& len)
@@ -498,6 +545,7 @@ public:
     {
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
         _onBodyWriteCb = [this](const char* p, int64_t len) {
+            std::cerr << ">>> Writing " << len << " bytes." << std::endl;
             if (_bodyFile.good())
                 _bodyFile.write(p, len);
             return _bodyFile.good() ? len : -1;
@@ -523,6 +571,10 @@ public:
     /// and/or to interrupt transmission.
     int64_t readData(const char* p, int64_t len)
     {
+        // std::ostringstream oss;
+        // Util::dumpHex(oss, "", "", std::string(p, len));
+        // std::cerr << oss.str() << std::endl;
+
         // We got some data.
         _state = State::Incomplete;
 
@@ -553,7 +605,7 @@ public:
             }
         }
 
-        if (_parserStage == ParserStage::Header)
+        if (_parserStage == ParserStage::Header && available)
         {
             const int64_t read = _header.parse(p, available);
             if (read < 0)
@@ -579,6 +631,10 @@ public:
                         _parserStage = ParserStage::Finished;
                     }
                 }
+                else if (!_header.getTransferEncoding().empty())
+                {
+                    _parserStage = ParserStage::Body;
+                }
 
                 if (_statusLine.statusCategory() == StatusLine::StatusCodeClass::Informational
                     || _statusLine.statusCode() == 204 /*No Content*/
@@ -590,24 +646,128 @@ public:
             }
         }
 
-        if (_parserStage == ParserStage::Body)
+        if (_parserStage == ParserStage::Body && available)
         {
-            // std::cerr << "ParserStage::Body: " << available << "\n"
-            //           << std::string(p, available) << std::endl;
-            const int64_t read = _onBodyWriteCb(p, available);
-            if (read < 0)
+            std::cerr << "ParserStage::Body: " << available << '\n';
+            //   << std::string(p, available) << std::endl;
+
+            if (_statusLine.statusCategory() != StatusLine::StatusCodeClass::Successful)
             {
-                _state = State::Error;
-                return read;
+                // Failed: Store the body in memory.
+                saveBodyToMemory();
             }
 
-            if (read > 0)
+            if (_header.getChunkedTransferEncoding())
             {
-                available -= read;
-                _recvBodySize += read;
-                if (_header.hasContentLength() && _recvBodySize >= _header.getContentLength())
+                // This is a chunked transfer.
+                // Find the start of the chunk, which is
+                // the length of the chunk in hex.
+                // each chunk is preceeded by its length in hex.
+                while (available)
                 {
-                    _parserStage = ParserStage::Finished;
+                    int64_t off = skipSpaceAndTab(p, 0, available);
+                    if (off == available)
+                    {
+                        std::cerr << "Not enough data after skipping space and tab\n";
+                        // Not enough data.
+                        return len; // Consumed all data.
+                    }
+
+                    p += off;
+                    available -= off;
+
+                    // Skip blank lines.
+                    off = skipCRLF(p, available);
+                    if (off == available)
+                    {
+                        std::cerr << "Not enough data after skipping new lines\n";
+                    }
+                    p += off;
+                    available -= off;
+
+                    // Read ahead to see if we have enough data
+                    // to consume the chunk length.
+                    off = skipToNewLine(p, available);
+                    if (off == available)
+                    {
+                        std::cerr << "Not enough data after skipping to new line\n";
+                        // Not enough data.
+                        return len - available; // Don't remove.
+                    }
+
+                    // Read the chunk length.
+                    int64_t chunkLen = 0;
+                    while (available)
+                    {
+                        const int digit = Util::hexDigitFromChar(*p);
+                        if (digit < 0)
+                            break;
+
+                        chunkLen = chunkLen * 16 + digit;
+                        --available;
+                        ++p;
+                    }
+
+                    std::cerr << ">>> ChunkLen: " << chunkLen << std::endl;
+
+                    if (chunkLen > 0)
+                    {
+                        // Skip any chunk extensions.
+                        off = skipToNewLine(p, available);
+                        assert(off < available); // We checked above!
+                        available -= off;
+                        p += off;
+
+                        // Do we have enough data for this chunk?
+                        if (chunkLen > 0 && available < chunkLen + 2) // + CRLF.
+                        {
+                            // Not enough data.
+                            return len - available; // Don't remove.
+                        }
+
+                        const int64_t read = _onBodyWriteCb(p, chunkLen);
+                        if (read != chunkLen)
+                        {
+                            _state = State::Error;
+                            return -1;
+                        }
+
+                        available -= chunkLen;
+                        p += chunkLen;
+                        _recvBodySize += chunkLen;
+
+                        // Skip blank lines.
+                        off = skipCRLF(p, available);
+                        p += off;
+                        available -= off;
+                    }
+                    else
+                    {
+                        // That was the last chunk!
+                        _parserStage = ParserStage::Finished;
+                        available = 0; // Consume all.
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                // Non-chunked payload.
+                const int64_t read = _onBodyWriteCb(p, available);
+                if (read < 0)
+                {
+                    _state = State::Error;
+                    return read;
+                }
+
+                if (read > 0)
+                {
+                    available -= read;
+                    _recvBodySize += read;
+                    if (_header.hasContentLength() && _recvBodySize >= _header.getContentLength())
+                    {
+                        _parserStage = ParserStage::Finished;
+                    }
                 }
             }
         }
@@ -625,7 +785,7 @@ public:
     void finish()
     {
         _bodyFile.close();
-        std::cerr << "State::Complete\n";
+        std::cerr << ">>> State::Complete\n";
         _state = State::Complete;
     }
 
@@ -679,12 +839,17 @@ public:
 
     std::shared_ptr<const Response> response() const { return _response; }
 
-    bool syncRequest(const Request& req, const std::chrono::microseconds timeoutUs)
+    bool syncRequest(const Request& req, const std::chrono::microseconds timeoutUs,
+                     const std::string& saveToFilePath = std::string())
     {
+        std::cerr << "syncRequest\n";
+
         const auto deadline = std::chrono::steady_clock::now() + timeoutUs;
 
-        std::cerr << "syncRequest\n";
         _response.reset(new Response);
+        if (!saveToFilePath.empty())
+            _response->saveBodyToFile(saveToFilePath);
+
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
 
@@ -765,7 +930,7 @@ private:
             // Remove consumed data.
             data.erase(data.begin(), data.begin() + read);
         }
-        else if (read < 0 || _response->done())
+        else if (read < 0)
         {
             // Interrupt the transfer.
             disposition.setClosed();
