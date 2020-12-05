@@ -1049,7 +1049,8 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
     const std::size_t size = (fileStat.good() ? fileStat.size() : 0);
 
     Poco::URI uriObject(getUri());
-    uriObject.setPath(isSaveAs || isRename? uriObject.getPath(): uriObject.getPath() + "/contents");
+    uriObject.setPath(isSaveAs || isRename ? uriObject.getPath()
+                                           : uriObject.getPath() + "/contents");
     auth.authorizeURI(uriObject);
 
     const std::string uriAnonym = LOOLWSD::anonymizeUrl(uriObject.toString());
@@ -1065,25 +1066,25 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
         http::Request httpRequest = initHttpRequest(uriObject, auth, cookies);
         httpRequest.setVerb(http::Request::VERB_POST);
 
+        http::Header& httpHeader = httpRequest.header();
+
         if (!isSaveAs && !isRename)
         {
             // normal save
-            httpRequest.header().set("X-WOPI-Override", "PUT");
+            httpHeader.set("X-WOPI-Override", "PUT");
             if (lockCtx._supportsLocks)
-                httpRequest.header().set("X-WOPI-Lock", lockCtx._lockToken);
-            httpRequest.header().set("X-LOOL-WOPI-IsModifiedByUser",
-                                     isUserModified() ? "true" : "false");
-            httpRequest.header().set("X-LOOL-WOPI-IsAutosave", isAutosave() ? "true" : "false");
-            httpRequest.header().set("X-LOOL-WOPI-IsExitSave", isExitSave() ? "true" : "false");
+                httpHeader.set("X-WOPI-Lock", lockCtx._lockToken);
+            httpHeader.set("X-LOOL-WOPI-IsModifiedByUser", isUserModified() ? "true" : "false");
+            httpHeader.set("X-LOOL-WOPI-IsAutosave", isAutosave() ? "true" : "false");
+            httpHeader.set("X-LOOL-WOPI-IsExitSave", isExitSave() ? "true" : "false");
             if (!getExtendedData().empty())
-                httpRequest.header().set("X-LOOL-WOPI-ExtendedData", getExtendedData());
+                httpHeader.set("X-LOOL-WOPI-ExtendedData", getExtendedData());
 
             if (!getForceSave())
             {
                 // Request WOPI host to not overwrite if timestamps mismatch
-                httpRequest.header().set(
-                    "X-LOOL-WOPI-Timestamp",
-                    Util::getIso8601FracformatTime(getFileInfo().getModifiedTime()));
+                httpHeader.set("X-LOOL-WOPI-Timestamp",
+                               Util::getIso8601FracformatTime(getFileInfo().getModifiedTime()));
             }
         }
         else
@@ -1121,20 +1122,20 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
             if (isRename)
             {
                 // rename file
-                httpRequest.header().set("X-WOPI-Override", "RENAME_FILE");
-                httpRequest.header().set("X-WOPI-RequestedName", suggestedTarget);
+                httpHeader.set("X-WOPI-Override", "RENAME_FILE");
+                httpHeader.set("X-WOPI-RequestedName", suggestedTarget);
             }
             else
             {
                 // save as
-                httpRequest.header().set("X-WOPI-Override", "PUT_RELATIVE");
-                httpRequest.header().set("X-WOPI-Size", std::to_string(size));
-                httpRequest.header().set("X-WOPI-SuggestedTarget", suggestedTarget);
+                httpHeader.set("X-WOPI-Override", "PUT_RELATIVE");
+                httpHeader.set("X-WOPI-Size", std::to_string(size));
+                httpHeader.set("X-WOPI-SuggestedTarget", suggestedTarget);
             }
         }
 
-        httpRequest.header().setContentType("application/octet-stream");
-        httpRequest.header().setContentLength(size);
+        httpHeader.setContentType("application/octet-stream");
+        httpHeader.setContentLength(size);
 
         httpRequest.setBodyFile(filePath);
 
