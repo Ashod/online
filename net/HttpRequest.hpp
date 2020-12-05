@@ -130,10 +130,12 @@ public:
         LOG_TRC("Reading header given " << len << " bytes: " << std::string(p, std::min(len, 80L)));
         try
         {
+            //FIXME: implement http header parser!
             Poco::MemoryInputStream data(p, len);
-
             Poco::Net::HTTPResponse response;
             response.read(data);
+
+            // Copy the header entries over to us.
             for (const auto& pair : response)
             {
                 set(pair.first, pair.second);
@@ -560,19 +562,23 @@ public:
         New, //< Valid but meaningless.
         Incomplete, //< In progress, no errors.
         Error, //< This is for protocol errors, not 400 and 500 reponses.
-        Complete //< Successfully completed.
+        Complete //< Successfully completed (does *not* imply 200 OK).
     };
 
-    /// Signifies that the response is
+    /// The state of the Response (for the server's response use statusLine).
     State state() const { return _state; }
 
-    /// Returns true iff there is no more data to expect.
+    /// Returns true iff there is no more data to expect and the state is final.
     bool done() const { return (_state == State::Error || _state == State::Complete); }
 
     const StatusLine& statusLine() const { return _statusLine; }
 
     const Header& header() const { return _header; }
 
+    /// Redirect the response body, if any, to a file.
+    /// If the server responds with a non-success status code (i.e. not 2xx)
+    /// the body is redirected to memory to be read via getBody().
+    /// Check the statusLine().statusCategory() for the status code.
     void saveBodyToFile(const std::string& path)
     {
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
@@ -584,8 +590,12 @@ public:
         };
     }
 
+    /// Generic handler for the body payload.
+    /// See IoWriteFunc documentation for the contract.
     void saveBodyToHandler(IoWriteFunc onBodyWriteCb) { _onBodyWriteCb = std::move(onBodyWriteCb); }
 
+    /// The response body, if any, is stored in memory.
+    /// Use getBody() to read it.
     void saveBodyToMemory()
     {
         _onBodyWriteCb = [this](const char* p, int64_t len) {
@@ -596,7 +606,7 @@ public:
     }
 
     /// Returns the body, assuming it wasn't redirected to file or callback.
-    std::string getBody() const { return _body; }
+    const std::string& getBody() const { return _body; }
 
     /// Handles incoming data.
     /// Returns the number of bytes consumed, or -1 for error
