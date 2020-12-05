@@ -101,6 +101,7 @@ public:
     static constexpr const char* CONTENT_TYPE = "Content-Type";
     static constexpr const char* CONTENT_LENGTH = "Content-Length";
     static constexpr const char* TRANSFER_ENCODING = "Transfer-Encoding";
+    static constexpr const char* COOKIE = "Cookie";
 
     static constexpr int64_t MaxNumberFields = 128; // Arbitrary large number.
     static constexpr int64_t MaxNameLen = 512;
@@ -216,11 +217,42 @@ public:
     /// Get the Transfer-Encoding header, if any.
     std::string getTransferEncoding() const { return get(TRANSFER_ENCODING); }
 
+    /// Return true iff Transfer-Encoding is set to chunked (the last entry).
     bool getChunkedTransferEncoding() const { return _chunked; }
+
+    /// Adds a new "Cookie" header entry with the given cookies.
+    void addCookies(const Container& pairs)
+    {
+        std::string s;
+        s.reserve(256);
+        for (const auto& pair : pairs)
+        {
+            if (!s.empty())
+                s += "; ";
+            s += pair.first;
+            s += '=';
+            s += pair.second;
+        }
+
+        add(COOKIE, s);
+    }
+
+    /// Gets the name=value pairs of all "Cookie" header entries.
+    Container getCookies() const
+    {
+        Container cookies;
+        //FIXME: IMPLEMENT!!
+        // for (const auto& pair : _headers)
+        // {
+        // }
+
+        return cookies;
+    }
 
     /// Serialize the header to an output stream.
     template <typename T> T& serialize(T& os) const
     {
+        // Note: we don't add the end-of-header '\r\n'.
         for (const auto& pair : _headers)
         {
             os << pair.first << ": " << pair.second << "\r\n";
