@@ -8,6 +8,7 @@
 #include <chrono>
 #include <config.h>
 
+#include "HttpRequest.hpp"
 #include "Storage.hpp"
 
 #include <algorithm>
@@ -613,6 +614,24 @@ void WopiStorage::initHttpRequest(Poco::Net::HTTPRequest& request, const Poco::U
     request.set("X-LOOL-WOPI-ServerId", Util::getProcessIdentifier());
 }
 
+http::Request WopiStorage::initHttpRequest(const Poco::URI& uri, const Authorization& auth,
+                                           const std::string& cookies) const
+{
+    http::Request httpRequest(uri.getPathAndQuery());
+
+    //FIXME: Hack Hack Hack! Use own version.
+    Poco::Net::HTTPRequest request;
+    initHttpRequest(request, uri, auth, cookies);
+
+    // Copy the headers, including the cookies.
+    for (const auto& pair : request)
+    {
+        httpRequest.header().set(pair.first, pair.second);
+    }
+
+    return httpRequest;
+}
+
 std::unique_ptr<WopiStorage::WOPIFileInfo> WopiStorage::getWOPIFileInfo(const Authorization& auth,
                                                                         const std::string& cookies,
                                                                         LockContext& lockCtx)
@@ -960,20 +979,13 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
     {
         std::shared_ptr<http::Session> httpSession = getHttpSession(uriObject);
 
-        http::Request httpRequest(uriObject.getPathAndQuery());
-
-        //FIXME: Hack Hack Hack! Use own version.
-        Poco::Net::HTTPRequest request;
-        initHttpRequest(request, uriObject, auth, cookies);
-        for (const auto& pair : request)
-        {
-            httpRequest.header().set(pair.first, pair.second);
-        }
+        http::Request httpRequest = initHttpRequest(uriObject, auth, cookies);
 
         setRootFilePath(Poco::Path(getLocalRootPath(), getFileInfo().getFilename()).toString());
         setRootFilePathAnonym(LOOLWSD::anonymizeUrl(getRootFilePath()));
 
-        LOG_INF(">>> Getting file to [" << getRootFilePath() << "]");
+        LOG_INF(">>> Getting file to [" << getRootFilePath()
+                                        << "]: " << httpRequest.header().toString());
         httpSession->syncDownload(httpRequest, getRootFilePath());
         LOG_INF(">>> Finished getting file to [" << getRootFilePath() << "]");
 

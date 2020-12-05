@@ -541,6 +541,10 @@ private:
     void initHttpRequest(Poco::Net::HTTPRequest& request, const Poco::URI& uri,
                          const Authorization& auth, const std::string& cookies) const;
 
+    /// Create an http::Request with the common headers.
+    http::Request initHttpRequest(const Poco::URI& uri, const Authorization& auth,
+                                  const std::string& cookies) const;
+
 private:
     // Time spend in loading the file from storage
     std::chrono::milliseconds _wopiLoadDuration;
