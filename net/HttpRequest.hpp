@@ -817,6 +817,7 @@ class Session final : public ProtocolHandlerInterface
         : _host(host)
         , _port(port)
         , _secure(secure)
+        , _defaultTimeout(std::chrono::seconds(30))
         , _connected(false)
     {
     }
@@ -837,14 +838,26 @@ public:
     const std::string& port() const { return _port; }
     bool secure() const { return _secure; }
 
+    /// Set the default timeout, in microseconds.
+    void setDefaultTimeout(const std::chrono::microseconds timeout) { _defaultTimeout = timeout; }
+    /// Get the default timeout, in microseconds.
+    std::chrono::microseconds getDefaultTimeout() const { return _defaultTimeout; }
+
     std::shared_ptr<const Response> response() const { return _response; }
 
-    bool syncRequest(const Request& req, const std::chrono::microseconds timeoutUs,
+    /// Make a synchronous request with the given timeout.
+    /// When timeout is microseconds::zero(), the default is used.
+    /// For no timeout, use microseconds::max().
+    bool syncRequest(const Request& req,
+                     std::chrono::microseconds timeout = std::chrono::microseconds::zero(),
                      const std::string& saveToFilePath = std::string())
     {
         std::cerr << "syncRequest\n";
 
-        const auto deadline = std::chrono::steady_clock::now() + timeoutUs;
+        if (timeout == std::chrono::microseconds::zero())
+            timeout = getDefaultTimeout();
+
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
 
         _response.reset(new Response);
         if (!saveToFilePath.empty())
@@ -859,7 +872,7 @@ public:
         SocketPoll poller("HttpSessionPoll");
 
         poller.insertNewSocket(_socket);
-        poller.poll(timeoutUs);
+        poller.poll(timeout);
         while (!_response->done())
         {
             const auto now = std::chrono::steady_clock::now();
@@ -971,6 +984,7 @@ private:
     const std::string _host;
     const std::string _port;
     const bool _secure;
+    std::chrono::microseconds _defaultTimeout;
     std::shared_ptr<StreamSocket> _socket;
     Request _request;
     std::shared_ptr<Response> _response;

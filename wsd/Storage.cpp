@@ -483,9 +483,8 @@ std::shared_ptr<http::Session> StorageBase::getHttpSession(const Poco::URI& uri)
     // Create the session.
     auto httpSession = http::Session::create(uri.getHost(), uri.getPort(), useSSL);
 
-    //TODO: Set the timeout to the configured value.
-    // static int timeoutSec = LOOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
-    // httpSession->setTimeout(Poco::Timespan(timeoutSec, 0));
+    static int timeoutSec = LOOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
+    httpSession->setDefaultTimeout(std::chrono::seconds(timeoutSec));
 
     return httpSession;
 }
@@ -957,9 +956,8 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
         setRootFilePath(Poco::Path(getLocalRootPath(), getFileInfo().getFilename()).toString());
         setRootFilePathAnonym(LOOLWSD::anonymizeUrl(getRootFilePath()));
 
-        //FIXME: Timeout should be in session and come from the config.
         LOG_INF(">>> Getting file to [" << getRootFilePath() << "]");
-        httpSession->syncRequest(httpRequest, std::chrono::seconds(30), getRootFilePath());
+        httpSession->syncRequest(httpRequest, std::chrono::microseconds::zero(), getRootFilePath());
         LOG_INF(">>> Finished getting file to [" << getRootFilePath() << "]");
 
         std::shared_ptr<const http::Response> httpResponse = httpSession->response();
