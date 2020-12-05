@@ -845,23 +845,17 @@ public:
 
     std::shared_ptr<const Response> response() const { return _response; }
 
-    /// Make a synchronous request with the given timeout.
+    /// Make a synchronous request.
     /// When timeout is microseconds::zero(), the default is used.
-    /// For no timeout, use microseconds::max().
-    bool syncRequest(const Request& req,
-                     std::chrono::microseconds timeout = std::chrono::microseconds::zero(),
-                     const std::string& saveToFilePath = std::string())
+    /// Note: response must be setup beforehand.
+    bool syncRequestImpl(const Request& req, std::chrono::microseconds timeout)
     {
-        std::cerr << "syncRequest\n";
-
         if (timeout == std::chrono::microseconds::zero())
             timeout = getDefaultTimeout();
 
         const auto deadline = std::chrono::steady_clock::now() + timeout;
 
-        _response.reset(new Response);
-        if (!saveToFilePath.empty())
-            _response->saveBodyToFile(saveToFilePath);
+        assert(!!_response && "Response must be set!");
 
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
@@ -885,6 +879,38 @@ public:
         }
 
         return _response->state() == Response::State::Complete;
+    }
+
+    /// Make a synchronous request to download a file to the given path.
+    /// When timeout is microseconds::zero(), the default is used.
+    /// For no timeout, use microseconds::max().
+    /// Note: when the server returns an error, the response body,
+    /// if any, will be stored in memory and can be read via getBody().
+    /// I.e. when statusLine().statusCategory() != StatusLine::StatusCodeClass::Successful.
+    bool syncDownload(const Request& req, const std::string& saveToFilePath,
+                      std::chrono::microseconds timeout = std::chrono::microseconds::zero())
+    {
+        std::cerr << "syncDownload\n";
+
+        _response.reset(new Response);
+        if (!saveToFilePath.empty())
+            _response->saveBodyToFile(saveToFilePath);
+
+        return syncRequestImpl(req, timeout);
+    }
+
+    /// Make a synchronous request with the given timeout.
+    /// When timeout is microseconds::zero(), the default is used.
+    /// For no timeout, use microseconds::max().
+    /// The payload body of the response, if any, can be read via getBody().
+    bool syncRequest(const Request& req,
+                     std::chrono::microseconds timeout = std::chrono::microseconds::zero())
+    {
+        std::cerr << "syncRequest\n";
+
+        _response.reset(new Response);
+
+        return syncRequestImpl(req, timeout);
     }
 
     void asyncRequest(const Request& req, SocketPoll& poll)

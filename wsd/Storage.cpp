@@ -957,7 +957,7 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
         setRootFilePathAnonym(LOOLWSD::anonymizeUrl(getRootFilePath()));
 
         LOG_INF(">>> Getting file to [" << getRootFilePath() << "]");
-        httpSession->syncRequest(httpRequest, std::chrono::microseconds::zero(), getRootFilePath());
+        httpSession->syncDownload(httpRequest, getRootFilePath());
         LOG_INF(">>> Finished getting file to [" << getRootFilePath() << "]");
 
         std::shared_ptr<const http::Response> httpResponse = httpSession->response();
