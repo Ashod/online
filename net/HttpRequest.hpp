@@ -77,20 +77,18 @@ static inline int64_t skipCRLF(const char* p, int64_t len, int64_t off = 0)
     return len;
 }
 
-/// Skip the current line, including line-break(s)
-/// until the start of a new line.
-/// Returns the offiset to the first character
-/// of the new line, otherwise, len.
-/// Note: if the new line is empty, it will not skip it.
-/// I.e., for [xxxCRLFCRLF] the offset to the second CR is returned.
-static inline int64_t skipToNewLine(const char* p, int64_t len, int64_t off = 0)
+/// Find the line-break.
+/// Returns the offset to the first LF character,
+/// if found, otherwise, len.
+/// Ex.: for [xxxCRLFCRLF] the offset to the second LF is returned.
+static inline int64_t findLineBreak(const char* p, int64_t len, int64_t off = 0)
 {
     // Find the line break, which ends the status line.
     for (; off < len; ++off)
     {
         // We expect CRLF, but LF alone is enough.
         if (p[off] == '\n')
-            return off + 1;
+            return off;
     }
 
     return len;
@@ -571,10 +569,7 @@ public:
     /// and/or to interrupt transmission.
     int64_t readData(const char* p, int64_t len)
     {
-        // std::ostringstream oss;
-        // Util::dumpHex(oss, "", "", std::string(p, len));
-        // std::cerr << oss.str() << std::endl;
-
+        LOG_INF(">>> readData: " << len << " bytes");
         // We got some data.
         _state = State::Incomplete;
 
@@ -619,43 +614,53 @@ public:
                 available -= read;
                 p += read;
 
-                if (_header.hasContentLength())
-                {
-                    if (_header.getContentLength() > 0)
-                        _parserStage = ParserStage::Body;
-                    else if (_header.getContentLength() == 0)
-                        _parserStage = ParserStage::Finished; // No body, we are done.
-                    else if (_header.getContentLength() < 0)
-                    {
-                        _state = State::Error;
-                        _parserStage = ParserStage::Finished;
-                    }
-                }
-                else if (!_header.getTransferEncoding().empty())
-                {
-                    _parserStage = ParserStage::Body;
-                }
+                std::ostringstream oss;
+                Util::dumpHex(oss, "", "", std::string(p, std::min(available, 1 * 1024L)));
+                LOG_INF(">>> After Header: " << available << " bytes availble\n" << oss.str());
 
                 if (_statusLine.statusCategory() == StatusLine::StatusCodeClass::Informational
                     || _statusLine.statusCode() == 204 /*No Content*/
                     || _statusLine.statusCode() == 304 /*Not Modified*/) // || HEAD request
                 // || 2xx on CONNECT request
                 {
-                    _parserStage = ParserStage::Finished; // No body, we are done.
+                    // No body, we are done.
+                    _parserStage = ParserStage::Finished;
+                }
+                else
+                {
+                    // We can possibly have a body.
+                    if (_statusLine.statusCategory() != StatusLine::StatusCodeClass::Successful)
+                    {
+                        // Failed: Store the body (if any) in memory.
+                        saveBodyToMemory();
+                    }
+
+                    if (_header.hasContentLength())
+                    {
+                        if (_header.getContentLength() > 0)
+                            _parserStage = ParserStage::Body;
+                        else if (_header.getContentLength() == 0)
+                            _parserStage = ParserStage::Finished; // No body, we are done.
+                        else if (_header.getContentLength() < 0)
+                        {
+                            LOG_ERR("Unexpected Content-Length header in response: "
+                                    << _header.getContentLength());
+                            _state = State::Error;
+                            _parserStage = ParserStage::Finished;
+                        }
+                    }
+                    else if (!_header.getTransferEncoding().empty())
+                    {
+                        _parserStage = ParserStage::Body;
+                    }
                 }
             }
         }
 
         if (_parserStage == ParserStage::Body && available)
         {
-            std::cerr << "ParserStage::Body: " << available << '\n';
+            LOG_INF(">>> ParserStage::Body: " << available);
             //   << std::string(p, available) << std::endl;
-
-            if (_statusLine.statusCategory() != StatusLine::StatusCodeClass::Successful)
-            {
-                // Failed: Store the body in memory.
-                saveBodyToMemory();
-            }
 
             if (_header.getChunkedTransferEncoding())
             {
@@ -665,69 +670,56 @@ public:
                 // each chunk is preceeded by its length in hex.
                 while (available)
                 {
-                    int64_t off = skipSpaceAndTab(p, 0, available);
-                    if (off == available)
-                    {
-                        std::cerr << "Not enough data after skipping space and tab\n";
-                        // Not enough data.
-                        return len; // Consumed all data.
-                    }
-
-                    p += off;
-                    available -= off;
-
-                    // Skip blank lines.
-                    off = skipCRLF(p, available);
-                    if (off == available)
-                    {
-                        std::cerr << "Not enough data after skipping new lines\n";
-                    }
-                    p += off;
-                    available -= off;
+                    std::ostringstream oss;
+                    Util::dumpHex(oss, "", "", std::string(p, std::min(available, 10 * 1024L)));
+                    LOG_INF(">>> New Chunk, " << available << " bytes availble\n" << oss.str());
 
                     // Read ahead to see if we have enough data
                     // to consume the chunk length.
-                    off = skipToNewLine(p, available);
+                    int64_t off = findLineBreak(p, available);
                     if (off == available)
                     {
-                        std::cerr << "Not enough data after skipping to new line\n";
+                        std::cerr << "Not enough data for chunk size\n";
                         // Not enough data.
                         return len - available; // Don't remove.
                     }
 
+                    ++off; // Skip the LF itself.
+
                     // Read the chunk length.
                     int64_t chunkLen = 0;
-                    while (available)
+                    int chunkLenSize = 0;
+                    for (; chunkLenSize < available; ++chunkLenSize)
                     {
-                        const int digit = Util::hexDigitFromChar(*p);
+                        const int digit = Util::hexDigitFromChar(p[chunkLenSize]);
                         if (digit < 0)
                             break;
 
                         chunkLen = chunkLen * 16 + digit;
-                        --available;
-                        ++p;
                     }
 
-                    std::cerr << ">>> ChunkLen: " << chunkLen << std::endl;
-
+                    LOG_INF(">>> ChunkLen: " << chunkLen);
                     if (chunkLen > 0)
                     {
-                        // Skip any chunk extensions.
-                        off = skipToNewLine(p, available);
-                        assert(off < available); // We checked above!
-                        available -= off;
-                        p += off;
-
                         // Do we have enough data for this chunk?
-                        if (chunkLen > 0 && available < chunkLen + 2) // + CRLF.
+                        if (available - off < chunkLen + 2) // + CRLF.
                         {
                             // Not enough data.
+                            LOG_INF(">>> Not enough chunk data. Need "
+                                    << chunkLen + 2 << " but have only " << available - off);
                             return len - available; // Don't remove.
                         }
+
+                        // Skip the chunkLen bytes and any chunk extensions.
+                        available -= off;
+                        p += off;
 
                         const int64_t read = _onBodyWriteCb(p, chunkLen);
                         if (read != chunkLen)
                         {
+                            LOG_INF(">>> Error writing http response payload. Write "
+                                    "handler returned "
+                                    << read << " instead of " << chunkLen);
                             _state = State::Error;
                             return -1;
                         }
@@ -735,6 +727,8 @@ public:
                         available -= chunkLen;
                         p += chunkLen;
                         _recvBodySize += chunkLen;
+                        LOG_INF(">>> Wrote " << chunkLen << " bytes for a total of "
+                                             << _recvBodySize);
 
                         // Skip blank lines.
                         off = skipCRLF(p, available);
@@ -746,6 +740,7 @@ public:
                         // That was the last chunk!
                         _parserStage = ParserStage::Finished;
                         available = 0; // Consume all.
+                        LOG_INF(">>> Got LastChunk, finished.");
                         break;
                     }
                 }
@@ -756,6 +751,8 @@ public:
                 const int64_t read = _onBodyWriteCb(p, available);
                 if (read < 0)
                 {
+                    LOG_INF(">>> Error writing http response payload. Write handler returned "
+                            << read << " instead of " << available);
                     _state = State::Error;
                     return read;
                 }
@@ -766,6 +763,7 @@ public:
                     _recvBodySize += read;
                     if (_header.hasContentLength() && _recvBodySize >= _header.getContentLength())
                     {
+                        LOG_INF(">>> Wrote all content, finished.");
                         _parserStage = ParserStage::Finished;
                     }
                 }
@@ -777,6 +775,8 @@ public:
             finish();
         }
 
+        LOG_INF(">>> Done consuming response, had " << len << " bytes, consumed " << len - available
+                                                    << " leaving " << available << " unused.");
         return len - available;
     }
 
