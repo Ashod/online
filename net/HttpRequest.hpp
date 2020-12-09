@@ -672,22 +672,25 @@ public:
 
                     if (_header.hasContentLength())
                     {
-                        if (_header.getContentLength() > 0)
-                            _parserStage = ParserStage::Body;
-                        else if (_header.getContentLength() == 0)
-                            _parserStage = ParserStage::Finished; // No body, we are done.
-                        else if (_header.getContentLength() < 0)
+                        if (_header.getContentLength() < 0
+                            || !_header.getTransferEncoding().empty())
                         {
+                            // Invalid Content-Length or have Transfer-Encoding too.
+                            // 3.3.2.  Content-Length
+                            // A sender MUST NOT send a Content-Length header field in any message
+                            // that contains a Transfer-Encoding header field.
                             LOG_ERR("Unexpected Content-Length header in response: "
-                                    << _header.getContentLength());
+                                    << _header.getContentLength()
+                                    << ", Transfer-Encoding: " << _header.getTransferEncoding());
                             _state = State::Error;
                             _parserStage = ParserStage::Finished;
                         }
+                        else if (_header.getContentLength() == 0)
+                            _parserStage = ParserStage::Finished; // No body, we are done.
                     }
-                    else if (!_header.getTransferEncoding().empty())
-                    {
+
+                    if (_parserStage != ParserStage::Finished)
                         _parserStage = ParserStage::Body;
-                    }
                 }
             }
         }
