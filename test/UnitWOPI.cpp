@@ -51,6 +51,7 @@ public:
 
     void assertPutFileRequest(const Poco::Net::HTTPRequest& request) override
     {
+        LOG_INF("assertPutFileRequest: ... ");
         if (_savingPhase == SavingPhase::Unmodified)
         {
             // the document is not modified
@@ -88,11 +89,15 @@ public:
         {
             case Phase::LoadAndSave:
             {
+                LOG_INF(testName << ": LoadAndSave: initWebsocket.");
                 initWebsocket("/wopi/files/0?access_token=anything");
 
+                LOG_INF(testName << ": LoadAndSave: load url=" << getWopiSrc());
                 helpers::sendTextFrame(*getWs()->getLOOLWebSocket(), "load url=" + getWopiSrc(), testName);
+                LOG_INF(testName << ": LoadAndSave: save dontTerminateEdit=1 dontSaveIfUnmodified=0");
                 helpers::sendTextFrame(*getWs()->getLOOLWebSocket(), "save dontTerminateEdit=1 dontSaveIfUnmodified=0", testName);
 
+                LOG_INF(testName << ": LoadAndSave => Modify");
                 _phase = Phase::Modify;
                 _savingPhase = SavingPhase::Unmodified;
                 SocketPoll::wakeupWorld();
@@ -100,20 +105,25 @@ public:
             }
             case Phase::Modify:
             {
+                LOG_INF(testName << ": Modify: key type=input char=97 key=0");
                 helpers::sendTextFrame(*getWs()->getLOOLWebSocket(), "key type=input char=97 key=0", testName);
+                LOG_INF(testName << ": Modify: key type=up char=0 key=512");
                 helpers::sendTextFrame(*getWs()->getLOOLWebSocket(), "key type=up char=0 key=512", testName);
 
+                LOG_INF(testName << ": Modify => SaveModified");
                 _phase = Phase::SaveModified;
                 break;
             }
             case Phase::SaveModified:
             {
+                LOG_INF(testName << ": SaveModify: save dontTerminateEdit=0 dontSaveIfUnmodified=0 ...");
                 helpers::sendTextFrame(*getWs()->getLOOLWebSocket(),
                                        "save dontTerminateEdit=0 dontSaveIfUnmodified=0 "
                                        "extendedData=CustomFlag%3DCustom%20Value%3BAnotherFlag%"
                                        "3DAnotherValue",
                                        testName);
 
+                LOG_INF(testName << ": SaveModified => Polling");
                 _phase = Phase::Polling;
                 _savingPhase = SavingPhase::Modified;
                 break;
