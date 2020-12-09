@@ -127,8 +127,7 @@ public:
 
     int64_t parse(const char* p, int64_t len)
     {
-        std::cerr << "Reading header given " << len
-                  << " bytes: " << std::string(p, std::min(len, 80L)) << std::endl;
+        LOG_TRC("Reading header given " << len << " bytes: " << std::string(p, std::min(len, 80L)));
         try
         {
             Poco::MemoryInputStream data(p, len);
@@ -145,13 +144,16 @@ public:
             setContentType(response.getContentType());
             _chunked = response.getChunkedTransferEncoding();
 
-            std::cerr << "Read " << data.tellg() << " bytes of header:" << std::endl;
-            std::cerr << std::string(p, data.tellg()) << std::endl;
+            LOG_TRC("Read " << data.tellg() << " bytes of header:\n"
+                            << std::string(p, data.tellg())
+                            << "\nhasContentLength: " << hasContentLength()
+                            << ", contentLength: " << (hasContentLength() ? getContentLength() : -1)
+                            << ", chunked: " << getChunkedTransferEncoding());
             return data.tellg();
         }
         catch (const Poco::Exception& exc)
         {
-            std::cerr << "ERROR: " << exc.displayText() << std::endl;
+            LOG_TRC("ERROR: " << exc.displayText());
         }
 
         return 0;
@@ -359,7 +361,7 @@ public:
             const std::string header = oss.str();
 
             out.append(header.data(), header.size());
-            std::cerr << "performWrites (header): " << header.size() << "\n";
+            LOG_TRC("performWrites (header): " << header.size());
             _stage = Stage::Body;
         }
 
@@ -377,7 +379,7 @@ public:
             else if (read > 0)
             {
                 out.append(buffer, read);
-                std::cerr << "performWrites (body): " << read << "\n";
+                LOG_TRC("performWrites (body): " << read);
             }
         }
 
@@ -575,7 +577,7 @@ public:
     {
         _bodyFile.open(path, std::ios_base::out | std::ios_base::binary);
         _onBodyWriteCb = [this](const char* p, int64_t len) {
-            std::cerr << ">>> Writing " << len << " bytes." << std::endl;
+            LOG_TRC(">>> Writing " << len << " bytes.");
             if (_bodyFile.good())
                 _bodyFile.write(p, len);
             return _bodyFile.good() ? len : -1;
@@ -717,7 +719,7 @@ public:
                     int64_t off = findLineBreak(p, available);
                     if (off == available)
                     {
-                        std::cerr << "Not enough data for chunk size\n";
+                        LOG_TRC("Not enough data for chunk size");
                         // Not enough data.
                         return len - available; // Don't remove.
                     }
@@ -928,7 +930,7 @@ public:
     bool syncDownload(const Request& req, const std::string& saveToFilePath,
                       std::chrono::microseconds timeout = std::chrono::microseconds::zero())
     {
-        std::cerr << "syncDownload\n";
+        LOG_TRC("syncDownload");
 
         _response.reset(new Response);
         if (!saveToFilePath.empty())
@@ -944,7 +946,7 @@ public:
     bool syncRequest(const Request& req,
                      std::chrono::microseconds timeout = std::chrono::microseconds::zero())
     {
-        std::cerr << "syncRequest\n";
+        LOG_TRC("syncRequest");
 
         _response.reset(new Response);
 
@@ -953,14 +955,14 @@ public:
 
     void asyncRequest(const Request& req, SocketPoll& poll)
     {
-        std::cerr << "asyncRequest\n";
+        LOG_TRC("asyncRequest");
         _response.reset(new Response);
         _request = req;
         _request.header().set("Host", host()); // Make sure the host is set.
 
         if (!_connected && connect())
         {
-            std::cerr << "Connected\n";
+            LOG_TRC("Connected");
             poll.insertNewSocket(_socket);
         }
         else
@@ -970,26 +972,26 @@ public:
 private:
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
-        std::cerr << "onConnect\n";
+        LOG_TRC("onConnect");
         LOG_TRC('#' << socket->getFD() << " Connected.");
         _connected = true;
     }
 
     void shutdown(bool /*goingAway*/, const std::string& /*statusMessage*/) override
     {
-        std::cerr << "shutdown\n";
+        LOG_TRC("shutdown");
     }
 
     void getIOStats(uint64_t& sent, uint64_t& recv) override
     {
-        std::cerr << "getIOStats\n";
+        LOG_TRC("getIOStats");
         _socket->getIOStats(sent, recv);
     }
 
     int getPollEvents(std::chrono::steady_clock::time_point /*now*/,
                       int64_t& /*timeoutMaxMicroS*/) override
     {
-        std::cerr << "getPollEvents\n";
+        LOG_TRC("getPollEvents");
         int events = POLLIN;
         if (_request.stage() != Request::Stage::Finished)
             events |= POLLOUT;
@@ -998,7 +1000,7 @@ private:
 
     virtual void handleIncomingMessage(SocketDisposition& disposition) override
     {
-        std::cerr << "handleIncomingMessage\n";
+        LOG_TRC("handleIncomingMessage");
 
         std::vector<char>& data = _socket->getInBuffer();
         const int64_t read = _response->readData(data.data(), data.size());
@@ -1016,7 +1018,7 @@ private:
 
     void performWrites() override
     {
-        std::cerr << "performWrites\n";
+        LOG_TRC("performWrites");
 
         Buffer& out = _socket->getOutBuffer();
         if (!_request.writeData(out))
@@ -1025,15 +1027,14 @@ private:
         }
         else if (!out.empty())
         {
-            std::cerr << "Sending\n"
-                      << std::string(out.getBlock(), out.getBlockSize()) << std::endl;
+            LOG_TRC("Sending\n" << std::string(out.getBlock(), out.getBlockSize()));
             _socket->writeOutgoingData();
         }
     }
 
     void onDisconnect() override
     {
-        std::cerr << "onDisconnect\n";
+        LOG_TRC("onDisconnect");
         _connected = false;
     }
 
