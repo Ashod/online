@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include "Ssl.hpp"
 #include <chrono>
 #include <config.h>
 
@@ -17,7 +18,7 @@
 #include <test/lokassert.hpp>
 
 #if ENABLE_SSL
-#  include <net/SslSocket.hpp>
+#include <net/SslSocket.hpp>
 #endif
 #include <net/HttpRequest.hpp>
 #include <FileUtil.hpp>
@@ -77,24 +78,37 @@ void HttpRequestTests::testSimpleGet()
 
     http::Request httpRequest(URL);
 
-    auto httpSession = http::Session::createHttpSsl(Host);
-    httpSession->asyncRequest(httpRequest, pollThread);
+    static constexpr http::Session::Protocol Protocols[]
+        = { http::Session::Protocol::HttpUnencrypted, http::Session::Protocol::HttpSsl };
+    for (const http::Session::Protocol protocol : Protocols)
+    {
+        if (protocol == http::Session::Protocol::HttpSsl)
+        {
+#ifdef ENABLE_SSL
+            if (!SslContext::isInitialized())
+#endif
+                continue; // Skip SSL, it's not enabled.
+        }
 
-    const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+        auto httpSession = http::Session::create(Host, protocol);
+        httpSession->asyncRequest(httpRequest, pollThread);
 
-    for (int i = 0; i < 10000 && !httpResponse->done(); ++i)
-        usleep(100); // Wait some more.
+        const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
-    LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
-    LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
-    LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
-    LOK_ASSERT(httpResponse->statusLine().statusCode() == 200);
-    LOK_ASSERT(httpResponse->statusLine().statusCategory()
-               == http::StatusLine::StatusCodeClass::Successful);
+        for (int i = 0; i < 10000 && !httpResponse->done(); ++i)
+            usleep(100); // Wait some more.
 
-    const std::string body = httpResponse->getBody();
-    LOK_ASSERT(!body.empty());
-    LOK_ASSERT_EQUAL(pocoResponse.second, body);
+        LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+        LOK_ASSERT(!httpResponse->statusLine().httpVersion().empty());
+        LOK_ASSERT(!httpResponse->statusLine().reasonPhrase().empty());
+        LOK_ASSERT(httpResponse->statusLine().statusCode() == 200);
+        LOK_ASSERT(httpResponse->statusLine().statusCategory()
+                   == http::StatusLine::StatusCodeClass::Successful);
+
+        const std::string body = httpResponse->getBody();
+        LOK_ASSERT(!body.empty());
+        LOK_ASSERT_EQUAL(pocoResponse.second, body);
+    }
 
     pollThread.joinThread();
 }
