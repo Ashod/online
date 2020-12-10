@@ -31,7 +31,9 @@
 #include <helpers.hpp>
 #include <Unit.hpp>
 #include <wsd/LOOLWSD.hpp>
-
+#if ENABLE_SSL
+#  include <SslSocket.hpp>
+#endif
 #include <Log.hpp>
 
 #include "common/Protocol.hpp"

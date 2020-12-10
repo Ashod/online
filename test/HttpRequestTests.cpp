@@ -16,6 +16,9 @@
 #include <string>
 #include <test/lokassert.hpp>
 
+#if ENABLE_SSL
+#  include <net/SslSocket.hpp>
+#endif
 #include <net/HttpRequest.hpp>
 #include <FileUtil.hpp>
 #include <Util.hpp>
