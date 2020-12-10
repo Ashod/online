@@ -481,8 +481,11 @@ std::shared_ptr<http::Session> StorageBase::getHttpSession(const Poco::URI& uri)
         useSSL = SSLEnabled || LOOLWSD::isSSLTermination();
     }
 
+    const auto protocol
+        = useSSL ? http::Session::Protocol::HttpSsl : http::Session::Protocol::HttpUnencrypted;
+
     // Create the session.
-    auto httpSession = http::Session::create(uri.getHost(), uri.getPort(), useSSL);
+    auto httpSession = http::Session::create(uri.getHost(), uri.getPort(), protocol);
 
     static int timeoutSec = LOOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
     httpSession->setDefaultTimeout(std::chrono::seconds(timeoutSec));

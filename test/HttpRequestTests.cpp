@@ -77,7 +77,7 @@ void HttpRequestTests::testSimpleGet()
 
     http::Request httpRequest(URL);
 
-    auto httpSession = http::Session::create(Host, 443, true);
+    auto httpSession = http::Session::createHttpSsl(Host);
     httpSession->asyncRequest(httpRequest, pollThread);
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
@@ -108,11 +108,9 @@ void HttpRequestTests::testSimpleGetSync()
 
     http::Request httpRequest(URL);
 
-    constexpr std::chrono::seconds timeout(1);
-
-    auto httpSession = http::Session::create(Host, 80, false);
-    LOK_ASSERT(httpSession->syncRequest(httpRequest, timeout));
-    LOK_ASSERT(httpSession->syncRequest(httpRequest, timeout)); // Second request.
+    auto httpSession = http::Session::createHttp(Host);
+    LOK_ASSERT(httpSession->syncRequest(httpRequest, std::chrono::seconds(1)));
+    LOK_ASSERT(httpSession->syncRequest(httpRequest, std::chrono::seconds(1))); // Second request.
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
     LOK_ASSERT(httpResponse->done());
@@ -156,7 +154,7 @@ void HttpRequestTests::test500GetStatuses()
 
     http::Request httpRequest;
 
-    auto httpSession = http::Session::create(host, 80, false);
+    auto httpSession = http::Session::createHttp(host);
 
     http::StatusLine::StatusCodeClass statusCodeClasses[]
         = { http::StatusLine::StatusCodeClass::Informational,
@@ -217,7 +215,7 @@ void HttpRequestTests::testSimplePost()
 
     httpRequest.setBodyFile(path);
 
-    auto httpSession = http::Session::create(Host, 80, false);
+    auto httpSession = http::Session::createHttp(Host);
     httpSession->asyncRequest(httpRequest, pollThread);
 
     std::shared_ptr<const http::Response> httpResponse = httpSession->response();

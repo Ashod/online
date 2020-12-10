@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -21,7 +22,7 @@
 #include "Common.hpp"
 #include <net/Socket.hpp>
 #if ENABLE_SSL
-#  include <net/SslSocket.hpp>
+#include <net/SslSocket.hpp>
 #endif
 #include "Log.hpp"
 #include "Util.hpp"
@@ -866,30 +867,84 @@ private:
 /// Designed to be reused for multiple requests.
 class Session final : public ProtocolHandlerInterface
 {
-    Session(const std::string& host, const std::string& port, bool secure)
+public:
+    enum class Protocol
+    {
+        HttpUnencrypted,
+        HttpSsl,
+    };
+
+private:
+    Session(const std::string& host, Protocol protocol, int port)
         : _host(host)
-        , _port(port)
-        , _secure(secure)
+        , _port(std::to_string(port))
+        , _protocol(protocol)
         , _defaultTimeout(std::chrono::seconds(30))
         , _connected(false)
     {
     }
 
-public:
-    static std::shared_ptr<Session> create(const std::string& host, const std::string& port,
-                                           bool secure)
+    /// Returns the given protocol's scheme.
+    static const char* getProtocolScheme(Protocol protocol)
     {
-        return std::shared_ptr<Session>(new Session(host, port, secure));
+        switch (protocol)
+        {
+            case Protocol::HttpUnencrypted:
+                return "http";
+            case Protocol::HttpSsl:
+                return "https";
+        }
+
+        return "";
     }
 
-    static std::shared_ptr<Session> create(const std::string& host, const int port, bool secure)
+public:
+    /// Create a new HTTP Session to the given host.
+    static std::shared_ptr<Session> create(const std::string& host, int port, Protocol protocol)
     {
-        return create(host, std::to_string(port), secure);
+        return std::shared_ptr<Session>(new Session(host, protocol, port));
     }
+
+    /// Create a new HTTP Session to the given host.
+    /// The port defaults to the protocol's default port.
+    static std::shared_ptr<Session> create(const std::string& host, Protocol protocol)
+    {
+        return create(host, getDefaultPort(protocol), protocol);
+    }
+
+    /// Create a new unencrypted HTTP Session to the given host.
+    static std::shared_ptr<Session> createHttp(const std::string& host)
+    {
+        return create(host, Protocol::HttpUnencrypted);
+    }
+
+    /// Create a new SSL HTTP Session to the given host.
+    static std::shared_ptr<Session> createHttpSsl(const std::string& host)
+    {
+        return create(host, Protocol::HttpSsl);
+    }
+
+    /// Returns the given protocol's default port.
+    static int getDefaultPort(Protocol protocol)
+    {
+        switch (protocol)
+        {
+            case Protocol::HttpUnencrypted:
+                return 80;
+            case Protocol::HttpSsl:
+                return 443;
+        }
+
+        return 0;
+    }
+
+    /// Returns the current protocol scheme.
+    const char* getProtocolScheme() const { return getProtocolScheme(_protocol); }
 
     const std::string& host() const { return _host; }
     const std::string& port() const { return _port; }
-    bool secure() const { return _secure; }
+    Protocol protocol() const { return _protocol; }
+    bool isSecure() const { return _protocol == Protocol::HttpSsl; }
 
     /// Set the default timeout, in microseconds.
     void setDefaultTimeout(const std::chrono::microseconds timeout) { _defaultTimeout = timeout; }
@@ -1062,7 +1117,7 @@ private:
 private:
     const std::string _host;
     const std::string _port;
-    const bool _secure;
+    const Protocol _protocol;
     std::chrono::microseconds _defaultTimeout;
     std::shared_ptr<StreamSocket> _socket;
     Request _request;
@@ -1072,8 +1127,7 @@ private:
 
 inline bool Session::connect()
 {
-    LOG_DBG("Connecting to " << _host << " : " << _port << " (" << (_secure ? "SSL" : "plain")
-                             << ")");
+    LOG_DBG("Connecting to " << _host << " : " << _port << " (" << getProtocolScheme() << ")");
 
     // FIXME: store the address?
     struct addrinfo* ainfo = nullptr;
@@ -1082,7 +1136,7 @@ inline bool Session::connect()
     const int rc = getaddrinfo(_host.c_str(), _port.c_str(), &hints, &ainfo);
 
 #if !ENABLE_SSL
-    if (_secure)
+    if (isSecure())
     {
         LOG_ERR("Error: wss for client websocket requested but SSL not compiled in.");
         return false;
@@ -1109,11 +1163,11 @@ inline bool Session::connect()
                 else
                 {
 #if ENABLE_SSL
-                    if (_secure)
+                    if (isSecure())
                         _socket
                             = StreamSocket::create<SslStreamSocket>(fd, true, shared_from_this());
 #endif
-                    if (!_socket && !_secure)
+                    if (!_socket && !isSecure())
                         _socket = StreamSocket::create<StreamSocket>(fd, true, shared_from_this());
 
                     if (_socket)
