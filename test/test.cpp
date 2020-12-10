@@ -5,6 +5,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#include "Ssl.hpp"
 #define TST_LOG_REDIRECT
 #include <test.hpp>
 
@@ -90,6 +91,28 @@ int main(int argc, char** argv)
 
     const char* loglevel = verbose ? "trace" : "warning";
     Log::initialize("tst", loglevel, true, false, {});
+
+#if ENABLE_SSL
+    try
+    {
+        // The most likely place. If not found, SSL will be disabled in the tests.
+        const std::string ssl_cert_file_path = "/etc/loolwsd/cert.pem";
+        const std::string ssl_key_file_path = "/etc/loolwsd/key.pem";
+        const std::string ssl_ca_file_path = "/etc/loolwsd/ca-chain.cert.pem";
+        const std::string ssl_cipher_list = "ALL:!ADH:!LOW:!EXP:!MD5:@STRENGTH";
+
+        // Initialize the non-blocking socket SSL.
+        SslContext::initialize(ssl_cert_file_path, ssl_key_file_path, ssl_ca_file_path,
+                               ssl_cipher_list);
+        if (!SslContext ::isInitialized())
+            LOG_ERR("Failed to initialize SSL. HTTPS tests will be disabled in unit-tests.");
+    }
+    catch (const std::exception& ex)
+    {
+        LOG_ERR("Failed to initialize SSL. HTTPS tests will be disabled in unit-tests. Exception: "
+                << ex.what());
+    }
+#endif
 
     return runClientTests(true, verbose)? 0: 1;
 }

@@ -24,7 +24,7 @@
 #include <Util.hpp>
 
 /// http::Request unit-tests.
-class HttpRequestTests : public CPPUNIT_NS::TestFixture
+class HttpRequestTests final : public CPPUNIT_NS::TestFixture
 {
     CPPUNIT_TEST_SUITE(HttpRequestTests);
 
@@ -66,7 +66,7 @@ static std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string
 
 void HttpRequestTests::testSimpleGet()
 {
-    const char* Host = "www.example.com";
+    const char* Host = "example.com";
     const char* URL = "/";
 
     const auto pocoResponse = pocoGet(Host, URL);
@@ -77,7 +77,7 @@ void HttpRequestTests::testSimpleGet()
 
     http::Request httpRequest(URL);
 
-    auto httpSession = http::Session::create(Host, 80, false);
+    auto httpSession = http::Session::create(Host, 443, true);
     httpSession->asyncRequest(httpRequest, pollThread);
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();

@@ -113,6 +113,8 @@ public:
     {
         assertCorrectThread();
 
+        LOG_INF(">>> readData: " << len);
+
 #if ENABLE_DEBUG
         if (simulateSocketError(true))
             return -1;
@@ -124,6 +126,7 @@ public:
     {
         assertCorrectThread();
 
+        LOG_INF(">>> writeData: " << len);
         assert (len > 0); // Never write 0 bytes.
 
 #if ENABLE_DEBUG
@@ -161,6 +164,7 @@ private:
     int doHandshake()
     {
         assertCorrectThread();
+        LOG_INF(">>> doHandshake");
 
         if (_doHandshake)
         {
@@ -174,6 +178,7 @@ private:
             if (rc <= 0)
             {
                 rc = handleSslState(rc);
+                LOG_INF(">>> doHandshake: " << rc);
                 if (rc <= 0)
                     return rc != 0;
             }
@@ -182,6 +187,7 @@ private:
         }
 
         // Handshake complete.
+        LOG_INF(">>> doHandshake: complete");
         return 1;
     }
 
