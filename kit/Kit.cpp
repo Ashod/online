@@ -148,7 +148,7 @@ namespace
     };
     LinkOrCopyType linkOrCopyType;
     std::string sourceForLinkOrCopy;
-    Path destinationForLinkOrCopy;
+    Poco::Path destinationForLinkOrCopy;
     std::chrono::time_point<std::chrono::steady_clock> linkOrCopyStartTime;
     bool linkOrCopyVerboseLogging = false;
     unsigned linkOrCopyFileCount = 0; // Track to help quantify the link-or-copy performance.
@@ -280,13 +280,13 @@ namespace
 
         assert(fpath[strlen(sourceForLinkOrCopy.c_str())] == '/');
         const char *relativeOldPath = fpath + strlen(sourceForLinkOrCopy.c_str()) + 1;
-        const Path newPath(destinationForLinkOrCopy, Path(relativeOldPath));
+        const Poco::Path newPath(destinationForLinkOrCopy, Poco::Path(relativeOldPath));
 
         switch (typeflag)
         {
         case FTW_F:
         case FTW_SLN:
-            File(newPath.parent()).createDirectories();
+            Poco::File(newPath.parent()).createDirectories();
 
             if (shouldLinkFile(relativeOldPath))
                 linkOrCopyFile(fpath, newPath.toString());
@@ -304,7 +304,8 @@ namespace
                     LOG_TRC("nftw: Skipping redundant path: " << relativeOldPath);
                     return FTW_SKIP_SUBTREE;
                 }
-                File(newPath).createDirectories();
+
+                Poco::File(newPath).createDirectories();
                 struct utimbuf ut;
                 ut.actime = st.st_atime;
                 ut.modtime = st.st_mtime;
@@ -328,7 +329,7 @@ namespace
                 }
                 target[written] = '\0';
 
-                File(newPath.parent()).createDirectories();
+                Poco::File(newPath.parent()).createDirectories();
                 if (symlink(target, newPath.toString().c_str()) == -1)
                 {
                     LOG_SYS("nftw: symlink(\"" << target << "\", \"" << newPath.toString()
@@ -353,7 +354,7 @@ namespace
     }
 
     void linkOrCopy(std::string source,
-                    const Path& destination,
+                    const Poco::Path& destination,
                     LinkOrCopyType type)
     {
         std::string resolved = FileUtil::realpath(source);
@@ -393,7 +394,6 @@ namespace
                                           << " files / second.");
         }
     }
-
 #ifndef __FreeBSD__
     void dropCapability(cap_value_t capability)
     {
@@ -434,10 +434,10 @@ namespace
         cap_free(caps);
     }
 #endif // __FreeBSD__
-#endif
-}
+#endif // BUILDING_TESTS
+} // namespace
 
-#endif
+#endif // !MOBILEAPP
 
 /// A document container.
 /// Owns LOKitDocument instance and connections.
