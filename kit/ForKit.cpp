@@ -618,6 +618,8 @@ int main(int argc, char** argv)
         }
     }
 
+    sysTemplate = JailUtil::getTemplatePath(childRoot);
+
     if (sysTemplate.empty() || loTemplate.empty() || childRoot.empty())
     {
         printArgumentHelp();
@@ -654,12 +656,6 @@ int main(int argc, char** argv)
 
     if (Util::getProcessThreadCount() != 1)
         LOG_ERR("Error: forkit has more than a single thread after pre-init");
-
-    // Link the network and system files in sysTemplate, if possible.
-    JailUtil::SysTemplate::setupDynamicFiles(sysTemplate);
-
-    // Make dev/[u]random point to the writable devices in tmp/dev/.
-    JailUtil::SysTemplate::setupRandomDeviceLinks(sysTemplate);
 
     LOG_INF("Preinit stage OK.");
 
