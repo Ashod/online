@@ -825,8 +825,11 @@ public:
     void finish()
     {
         _bodyFile.close();
-        std::cerr << ">>> State::Complete\n";
-        _state = State::Complete;
+        if (!done())
+        {
+            LOG_TRC(">>> State::Complete");
+            _state = State::Complete;
+        }
     }
 
 private:
@@ -1036,6 +1039,7 @@ private:
     {
         LOG_TRC("onDisconnect");
         _connected = false;
+        _response->finish();
     }
 
     bool connect();
