@@ -1150,7 +1150,7 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
         httpSession->syncRequest(httpRequest);
         LOG_INF(">>> Finished sync upload.");
 
-        std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+        const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
         _wopiSaveDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - startTime);

@@ -973,7 +973,9 @@ public:
 
         SocketPoll poller("HttpSessionPoll");
 
+        LOG_ERR("insertNewsocket");
         poller.insertNewSocket(_socket);
+        LOG_ERR("poll " << timeout);
         poller.poll(timeout);
         while (!_response->done())
         {
