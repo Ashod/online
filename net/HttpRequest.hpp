@@ -650,6 +650,9 @@ public:
                 Util::dumpHex(oss, "", "", std::string(p, std::min(available, 1 * 1024L)));
                 LOG_INF(">>> After Header: " << available << " bytes availble\n" << oss.str());
 
+                // Assume we have a body unless we have reason to expect otherwise.
+                _parserStage = ParserStage::Body;
+
                 if (_statusLine.statusCategory() == StatusLine::StatusCodeClass::Informational
                     || _statusLine.statusCode() == 204 /*No Content*/
                     || _statusLine.statusCode() == 304 /*Not Modified*/) // || HEAD request
