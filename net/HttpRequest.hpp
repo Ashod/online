@@ -835,10 +835,10 @@ public:
     /// and cleans up and updates the states.
     void finish()
     {
-        _bodyFile.close();
         if (!done())
         {
             LOG_TRC(">>> State::Complete");
+            _bodyFile.close();
             _state = State::Complete;
         }
     }
