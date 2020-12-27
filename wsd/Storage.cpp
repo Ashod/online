@@ -488,7 +488,7 @@ std::shared_ptr<http::Session> StorageBase::getHttpSession(const Poco::URI& uri)
     auto httpSession = http::Session::create(uri.getHost(), uri.getPort(), protocol);
 
     static int timeoutSec = LOOLWSD::getConfigValue<int>("net.connection_timeout_secs", 30);
-    httpSession->setDefaultTimeout(std::chrono::seconds(timeoutSec));
+    httpSession->setTimeout(std::chrono::seconds(timeoutSec));
 
     return httpSession;
 }

@@ -563,6 +563,7 @@ public:
         New, //< Valid but meaningless.
         Incomplete, //< In progress, no errors.
         Error, //< This is for protocol errors, not 400 and 500 reponses.
+        Timeout, //< The request has exceeded the time allocated.
         Complete //< Successfully completed (does *not* imply 200 OK).
     };
 
@@ -570,7 +571,10 @@ public:
     State state() const { return _state; }
 
     /// Returns true iff there is no more data to expect and the state is final.
-    bool done() const { return (_state == State::Error || _state == State::Complete); }
+    bool done() const
+    {
+        return (_state == State::Error || _state == State::Timeout || _state == State::Complete);
+    }
 
     const StatusLine& statusLine() const { return _statusLine; }
 
@@ -843,6 +847,18 @@ public:
         }
     }
 
+    /// The request has exceeded the expected duration
+    /// and has ended prematurely.
+    void timeout()
+    {
+        if (!done())
+        {
+            LOG_TRC(">>> State::Timeout");
+            _bodyFile.close();
+            _state = State::Timeout;
+        }
+    }
+
 private:
     /// The stage we're at in consuming the received data.
     enum class ParserStage
@@ -879,7 +895,7 @@ private:
         : _host(host)
         , _port(std::to_string(port))
         , _protocol(protocol)
-        , _defaultTimeout(std::chrono::seconds(30))
+        , _timeout(std::chrono::seconds(30))
         , _connected(false)
     {
     }
@@ -946,21 +962,64 @@ public:
     Protocol protocol() const { return _protocol; }
     bool isSecure() const { return _protocol == Protocol::HttpSsl; }
 
-    /// Set the default timeout, in microseconds.
-    void setDefaultTimeout(const std::chrono::microseconds timeout) { _defaultTimeout = timeout; }
-    /// Get the default timeout, in microseconds.
-    std::chrono::microseconds getDefaultTimeout() const { return _defaultTimeout; }
+    /// Set the timeout, in microseconds.
+    void setTimeout(const std::chrono::microseconds timeout) { _timeout = timeout; }
+    /// Get the timeout, in microseconds.
+    std::chrono::microseconds getTimeout() const { return _timeout; }
 
     std::shared_ptr<const Response> response() const { return _response; }
 
-    /// Make a synchronous request.
-    /// When timeout is microseconds::zero(), the default is used.
-    /// Note: response must be setup beforehand.
-    bool syncRequestImpl(const Request& req, std::chrono::microseconds timeout)
+    /// Make a synchronous request to download a file to the given path.
+    /// Note: when the server returns an error, the response body,
+    /// if any, will be stored in memory and can be read via getBody().
+    /// I.e. when statusLine().statusCategory() != StatusLine::StatusCodeClass::Successful.
+    bool syncDownload(const Request& req, const std::string& saveToFilePath)
     {
-        if (timeout == std::chrono::microseconds::zero())
-            timeout = getDefaultTimeout();
+        LOG_TRC("syncDownload");
+        _startTime = std::chrono::steady_clock::now();
 
+        _response.reset(new Response);
+        if (!saveToFilePath.empty())
+            _response->saveBodyToFile(saveToFilePath);
+
+        return syncRequestImpl(req);
+    }
+
+    /// Make a synchronous request.
+    /// The payload body of the response, if any, can be read via getBody().
+    bool syncRequest(const Request& req)
+    {
+        LOG_TRC("syncRequest");
+        _startTime = std::chrono::steady_clock::now();
+
+        _response.reset(new Response);
+
+        return syncRequestImpl(req);
+    }
+
+    void asyncRequest(const Request& req, SocketPoll& poll)
+    {
+        LOG_TRC("asyncRequest");
+        _startTime = std::chrono::steady_clock::now();
+
+        _response.reset(new Response);
+        _request = req;
+        _request.header().set("Host", host()); // Make sure the host is set.
+
+        if (!_connected && connect())
+        {
+            LOG_TRC("Connected");
+            poll.insertNewSocket(_socket);
+        }
+        else
+            poll.wakeupWorld();
+    }
+
+private:
+    /// Make a synchronous request.
+    bool syncRequestImpl(const Request& req)
+    {
+        const std::chrono::microseconds timeout = getTimeout();
         const auto deadline = std::chrono::steady_clock::now() + timeout;
 
         assert(!!_response && "Response must be set!");
@@ -980,9 +1039,6 @@ public:
         while (!_response->done())
         {
             const auto now = std::chrono::steady_clock::now();
-            if (now >= deadline)
-                return false;
-
             const auto remaining
                 = std::chrono::duration_cast<std::chrono::microseconds>(deadline - now);
             poller.poll(remaining);
@@ -991,55 +1047,6 @@ public:
         return _response->state() == Response::State::Complete;
     }
 
-    /// Make a synchronous request to download a file to the given path.
-    /// When timeout is microseconds::zero(), the default is used.
-    /// For no timeout, use microseconds::max().
-    /// Note: when the server returns an error, the response body,
-    /// if any, will be stored in memory and can be read via getBody().
-    /// I.e. when statusLine().statusCategory() != StatusLine::StatusCodeClass::Successful.
-    bool syncDownload(const Request& req, const std::string& saveToFilePath,
-                      std::chrono::microseconds timeout = std::chrono::microseconds::zero())
-    {
-        LOG_TRC("syncDownload");
-
-        _response.reset(new Response);
-        if (!saveToFilePath.empty())
-            _response->saveBodyToFile(saveToFilePath);
-
-        return syncRequestImpl(req, timeout);
-    }
-
-    /// Make a synchronous request with the given timeout.
-    /// When timeout is microseconds::zero(), the default is used.
-    /// For no timeout, use microseconds::max().
-    /// The payload body of the response, if any, can be read via getBody().
-    bool syncRequest(const Request& req,
-                     std::chrono::microseconds timeout = std::chrono::microseconds::zero())
-    {
-        LOG_TRC("syncRequest");
-
-        _response.reset(new Response);
-
-        return syncRequestImpl(req, timeout);
-    }
-
-    void asyncRequest(const Request& req, SocketPoll& poll)
-    {
-        LOG_TRC("asyncRequest");
-        _response.reset(new Response);
-        _request = req;
-        _request.header().set("Host", host()); // Make sure the host is set.
-
-        if (!_connected && connect())
-        {
-            LOG_TRC("Connected");
-            poll.insertNewSocket(_socket);
-        }
-        else
-            poll.wakeupWorld();
-    }
-
-private:
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
     {
         LOG_TRC("onConnect");
@@ -1111,8 +1118,26 @@ private:
 
     bool connect();
 
-    /// Do we need to handle a timeout ?
-    void checkTimeout(std::chrono::steady_clock::time_point) override {}
+    void checkTimeout(std::chrono::steady_clock::time_point now) override
+    {
+        const auto duration
+            = std::chrono::duration_cast<std::chrono::milliseconds>(now - _startTime);
+        if (duration > getTimeout())
+        {
+            LOG_WRN("Socket #" << _socket->getFD() << " has timed out while requesting ["
+                               << _request.getVerb() << ' ' << _request.getUrl() << "] after "
+                               << duration);
+
+            // Flag that we timed out.
+            _response->timeout();
+
+            // Disconnect, which will also trigger the right events and handlers.
+            // Note that this is the right way to end the request in HTTP,
+            // it's also no good maintaining a poor connection (if that's the issue).
+            _socket->shutdown();
+        }
+    }
+
     int sendTextMessage(const char*, const size_t, bool) const override { return 0; }
     int sendBinaryMessage(const char*, const size_t, bool) const override { return 0; }
 
@@ -1120,7 +1145,8 @@ private:
     const std::string _host;
     const std::string _port;
     const Protocol _protocol;
-    std::chrono::microseconds _defaultTimeout;
+    std::chrono::microseconds _timeout;
+    std::chrono::steady_clock::time_point _startTime;
     std::shared_ptr<StreamSocket> _socket;
     Request _request;
     std::shared_ptr<Response> _response;

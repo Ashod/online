@@ -33,6 +33,7 @@ class HttpRequestTests final : public CPPUNIT_NS::TestFixture
     CPPUNIT_TEST(testSimpleGetSync);
     // CPPUNIT_TEST(test500GetStatuses);
     CPPUNIT_TEST(testSimplePost);
+    CPPUNIT_TEST(testTimeout);
 
     CPPUNIT_TEST_SUITE_END();
 
@@ -40,6 +41,7 @@ class HttpRequestTests final : public CPPUNIT_NS::TestFixture
     void testSimpleGetSync();
     void test500GetStatuses();
     void testSimplePost();
+    void testTimeout();
 };
 
 static std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
@@ -123,8 +125,9 @@ void HttpRequestTests::testSimpleGetSync()
     http::Request httpRequest(URL);
 
     auto httpSession = http::Session::createHttp(Host);
-    LOK_ASSERT(httpSession->syncRequest(httpRequest, std::chrono::seconds(1)));
-    LOK_ASSERT(httpSession->syncRequest(httpRequest, std::chrono::seconds(1))); // Second request.
+    httpSession->setTimeout(std::chrono::seconds(1));
+    LOK_ASSERT(httpSession->syncRequest(httpRequest));
+    LOK_ASSERT(httpSession->syncRequest(httpRequest)); // Second request.
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
     LOK_ASSERT(httpResponse->done());
@@ -169,6 +172,7 @@ void HttpRequestTests::test500GetStatuses()
     http::Request httpRequest;
 
     auto httpSession = http::Session::createHttp(host);
+    httpSession->setTimeout(std::chrono::seconds(1));
 
     http::StatusLine::StatusCodeClass statusCodeClasses[]
         = { http::StatusLine::StatusCodeClass::Informational,
@@ -202,7 +206,7 @@ void HttpRequestTests::test500GetStatuses()
             != http::StatusLine::StatusCodeClass::Informational)
         {
             const auto pocoResponse = pocoGet(host, url); // Get via Poco in parallel.
-            compare(pocoResponse.first, pocoResponse.second, *httpResponse.get());
+            compare(pocoResponse.first, pocoResponse.second, *httpResponse);
         }
     }
 
@@ -230,6 +234,7 @@ void HttpRequestTests::testSimplePost()
     httpRequest.setBodyFile(path);
 
     auto httpSession = http::Session::createHttp(Host);
+    httpSession->setTimeout(std::chrono::seconds(1));
     httpSession->asyncRequest(httpRequest, pollThread);
 
     std::shared_ptr<const http::Response> httpResponse = httpSession->response();
@@ -250,6 +255,24 @@ void HttpRequestTests::testSimplePost()
     LOK_ASSERT(body.find(data) != std::string::npos);
 
     pollThread.joinThread();
+}
+
+void HttpRequestTests::testTimeout()
+{
+    const char* Host = "www.example.com";
+    const char* URL = "/";
+
+    http::Request httpRequest(URL);
+
+    auto httpSession = http::Session::createHttp(Host);
+
+    httpSession->setTimeout(std::chrono::milliseconds(1)); // Very short interval.
+
+    LOK_ASSERT(!httpSession->syncRequest(httpRequest)); // Must fail to complete.
+
+    const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+    LOK_ASSERT(httpResponse->done());
+    LOK_ASSERT(httpResponse->state() == http::Response::State::Timeout);
 }
 
 CPPUNIT_TEST_SUITE_REGISTRATION(HttpRequestTests);
