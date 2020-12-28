@@ -34,6 +34,8 @@ class HttpRequestTests final : public CPPUNIT_NS::TestFixture
     // CPPUNIT_TEST(test500GetStatuses);
     CPPUNIT_TEST(testSimplePost);
     CPPUNIT_TEST(testTimeout);
+    CPPUNIT_TEST(testOnFinished_Complete);
+    CPPUNIT_TEST(testOnFinished_Timeout);
 
     CPPUNIT_TEST_SUITE_END();
 
@@ -42,6 +44,8 @@ class HttpRequestTests final : public CPPUNIT_NS::TestFixture
     void test500GetStatuses();
     void testSimplePost();
     void testTimeout();
+    void testOnFinished_Complete();
+    void testOnFinished_Timeout();
 };
 
 static std::pair<Poco::Net::HTTPResponse, std::string> pocoGet(const std::string& host,
@@ -271,6 +275,58 @@ void HttpRequestTests::testTimeout()
     LOK_ASSERT(!httpSession->syncRequest(httpRequest)); // Must fail to complete.
 
     const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+    LOK_ASSERT(httpResponse->done());
+    LOK_ASSERT(httpResponse->state() == http::Response::State::Timeout);
+}
+
+void HttpRequestTests::testOnFinished_Complete()
+{
+    const char* Host = "www.example.com";
+    const char* URL = "/";
+
+    http::Request httpRequest(URL);
+
+    auto httpSession = http::Session::createHttp(Host);
+
+    bool completed = false;
+    httpSession->setFinishedHandler([&](const std::shared_ptr<http::Session>& session) {
+        LOK_ASSERT(session->response()->done());
+        LOK_ASSERT(session->response()->state() == http::Response::State::Complete);
+        completed = true;
+        return true;
+    });
+
+    LOK_ASSERT(httpSession->syncRequest(httpRequest));
+
+    const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+    LOK_ASSERT(completed);
+    LOK_ASSERT(httpResponse->done());
+    LOK_ASSERT(httpResponse->state() == http::Response::State::Complete);
+}
+
+void HttpRequestTests::testOnFinished_Timeout()
+{
+    const char* Host = "www.example.com";
+    const char* URL = "/";
+
+    http::Request httpRequest(URL);
+
+    auto httpSession = http::Session::createHttp(Host);
+
+    httpSession->setTimeout(std::chrono::milliseconds(1)); // Very short interval.
+
+    bool completed = false;
+    httpSession->setFinishedHandler([&](const std::shared_ptr<http::Session>& session) {
+        LOK_ASSERT(session->response()->done());
+        LOK_ASSERT(session->response()->state() == http::Response::State::Timeout);
+        completed = true;
+        return true;
+    });
+
+    LOK_ASSERT(!httpSession->syncRequest(httpRequest));
+
+    const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+    LOK_ASSERT(completed);
     LOK_ASSERT(httpResponse->done());
     LOK_ASSERT(httpResponse->state() == http::Response::State::Timeout);
 }

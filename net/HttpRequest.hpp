@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdint>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <sys/types.h>
@@ -969,6 +970,14 @@ public:
 
     std::shared_ptr<const Response> response() const { return _response; }
 
+    /// The onFinished callback handler signature.
+    using FinishedCallback = std::function<void(const std::shared_ptr<Session>& session)>;
+
+    /// Set a callback to handle onFinished events from this session.
+    /// onFinished is triggered whenever a request has finished,
+    /// regardless of the reason (error, timeout, completion).
+    void setFinishedHandler(FinishedCallback onFinished) { _onFinished = std::move(onFinished); }
+
     /// Make a synchronous request to download a file to the given path.
     /// Note: when the server returns an error, the response body,
     /// if any, will be stored in memory and can be read via getBody().
@@ -1034,7 +1043,6 @@ private:
 
         LOG_ERR("insertNewsocket");
         poller.insertNewSocket(_socket);
-        LOG_ERR("poll " << timeout);
         poller.poll(timeout);
         while (!_response->done())
         {
@@ -1056,7 +1064,7 @@ private:
 
     void shutdown(bool /*goingAway*/, const std::string& /*statusMessage*/) override
     {
-        LOG_TRC("shutdown");
+        LOG_ERR("shutdown");
     }
 
     void getIOStats(uint64_t& sent, uint64_t& recv) override
@@ -1090,7 +1098,11 @@ private:
         {
             // Interrupt the transfer.
             disposition.setClosed();
+            _socket->shutdown();
         }
+
+        if (_response->done() && _onFinished)
+            _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
     }
 
     void performWrites() override
@@ -1107,6 +1119,9 @@ private:
             LOG_TRC("Sending\n" << std::string(out.getBlock(), out.getBlockSize()));
             _socket->writeOutgoingData();
         }
+
+        if (_response->done() && _onFinished)
+            _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
     }
 
     void onDisconnect() override
@@ -1131,10 +1146,17 @@ private:
             // Flag that we timed out.
             _response->timeout();
 
-            // Disconnect, which will also trigger the right events and handlers.
-            // Note that this is the right way to end the request in HTTP,
-            // it's also no good maintaining a poor connection (if that's the issue).
-            _socket->shutdown();
+            // Disconnect and trigger the right events and handlers.
+            // Note that this is the right way to end a request in HTTP, it's also
+            // no good maintaining a poor connection (if that's the issue).
+            _socket->shutdown(); // Flag for shutdown for housekeeping in SocketPoll.
+            _socket->closeConnection(); // Immediately disconnect.
+            onDisconnect(); // Trigger manually (why wait for poll to do it?).
+            assert(_connected == false);
+
+            // Notify that we finished the request.
+            if (_onFinished)
+                _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
         }
     }
 
@@ -1150,6 +1172,7 @@ private:
     std::shared_ptr<StreamSocket> _socket;
     Request _request;
     std::shared_ptr<Response> _response;
+    FinishedCallback _onFinished;
     bool _connected;
 };
 
