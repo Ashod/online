@@ -1119,21 +1119,22 @@ void DocumentBroker::uploadToStorageInternal(const std::string& sessionId, bool 
 
     _uploadRequest = Util::make_unique<UploadRequest>(uriAnonym, newFileModifiedTime, it->second,
                                                       isSaveAs, isRename);
-    const StorageBase::AsyncUpload asyncUp = _storage->uploadLocalFileToStorageAsync(
-        auth, it->second->getCookies(), *_lockCtx, saveAsPath, saveAsFilename, isRename);
 
-    switch (asyncUp.state())
-    {
-        case StorageBase::AsyncUpload::State::Running:
-            LOG_DBG("Async upload of [" << _docKey << "] is in progress.");
-            return;
+    StorageBase::AsyncUploadCallback asyncUploadCallback
+        = [this](const StorageBase::AsyncUpload& asyncUp) {
+            LOG_ERR(">>> onAsyncUploadCallback");
+              switch (asyncUp.state())
+              {
+                  case StorageBase::AsyncUpload::State::Running:
+                      LOG_DBG("Async upload of [" << _docKey << "] is in progress.");
+                      return;
 
-        case StorageBase::AsyncUpload::State::Success:
-        {
-            LOG_DBG("Successfully uploaded [" << _docKey << "], processing results.");
-            const StorageBase::UploadResult& uploadResult = asyncUp.result();
-            return handleUploadToStorageResponse(uploadResult);
-        }
+                  case StorageBase::AsyncUpload::State::Success:
+                  {
+                      LOG_DBG("Successfully uploaded [" << _docKey << "], processing results.");
+                      const StorageBase::UploadResult& uploadResult = asyncUp.result();
+                      return handleUploadToStorageResponse(uploadResult);
+                  }
 
         case StorageBase::AsyncUpload::State::None: // Unexpected: fallback.
         case StorageBase::AsyncUpload::State::Error:
@@ -1141,11 +1142,12 @@ void DocumentBroker::uploadToStorageInternal(const std::string& sessionId, bool 
             break;
     }
 
-    LOG_ERR("Failed to upload [" << _docKey
-                                 << "] asynchronously, will fallback to synchronous uploading.");
-    const StorageBase::UploadResult& uploadResult = _storage->uploadLocalFileToStorage(
-        auth, it->second->getCookies(), *_lockCtx, saveAsPath, saveAsFilename, isRename);
-    return handleUploadToStorageResponse(uploadResult);
+              //FIXME: flag the failure so we retry.
+              LOG_ERR("Failed to upload [" << _docKey << "] asynchronously.");
+          };
+
+    _storage->uploadLocalFileToStorageAsync(auth, it->second->getCookies(), *_lockCtx, saveAsPath,
+                                            saveAsFilename, isRename, *_poll, asyncUploadCallback);
 }
 
 void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResult& storageSaveResult)
