@@ -211,7 +211,7 @@ public:
             Success //< The last async upload request completed (regardless of the server's response).
         };
 
-        AsyncUpload(State state, UploadResult result = UploadResult::Result::FAILED)
+        AsyncUpload(State state, UploadResult result)
             : _state(state)
             , _result(std::move(result))
         {
@@ -328,25 +328,32 @@ public:
                              const std::string& saveAsFilename, const bool isRename)
         = 0;
 
+    /// The asynchronous upload completion callback function.
+    using AsyncUploadCallback = std::function<void(const AsyncUpload&)>;
+
     /// Writes the contents of the file back to the source asynchronously, if possible.
     /// @param cookies A string representing key=value pairs that are set as cookies.
     /// @param savedFile When the operation was saveAs, this is the path to the file that was saved.
     virtual AsyncUpload
     uploadLocalFileToStorageAsync(const Authorization& auth, const std::string& cookies,
                                   LockContext& lockCtx, const std::string& saveAsPath,
-                                  const std::string& saveAsFilename, const bool isRename)
+                                  const std::string& saveAsFilename, const bool isRename,
+                                  AsyncUploadCallback asyncUploadCallback)
     {
         // By default do a synchronous save.
         const UploadResult res = uploadLocalFileToStorage(auth, cookies, lockCtx, saveAsPath,
                                                           saveAsFilename, isRename);
-        return AsyncUpload(AsyncUpload::State::Success, res);
+        auto ret = AsyncUpload(AsyncUpload::State::Success, res);
+        if (asyncUploadCallback)
+            asyncUploadCallback(ret);
+        return ret;
     }
 
     /// Get the progress state of an asynchronous LocalFileToStorage upload.
     virtual AsyncUpload queryLocalFileToStorageAsyncUploadState()
     {
         // Unsupported.
-        return AsyncUpload(AsyncUpload::State::None);
+        return AsyncUpload(AsyncUpload::State::None, UploadResult(UploadResult::Result::OK));
     }
 
     /// Cancels an active asynchronous LocalFileToStorage upload.
