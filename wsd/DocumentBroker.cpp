@@ -1207,7 +1207,8 @@ void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResu
         {
             sessionIt.second->sendTextFrameAndLogError("error: cmd=storage kind=savediskfull");
         }
-        broadcastSaveResult(false, "Disk full", storageSaveResult.getErrorMsg());
+
+        broadcastSaveResult(false, "Disk full", storageSaveResult.getReason());
     }
     else if (storageSaveResult.getResult() == StorageBase::UploadResult::Result::UNAUTHORIZED)
     {
@@ -1246,7 +1247,7 @@ void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResu
                                                 << "]. The client session is closed.");
         }
 
-        broadcastSaveResult(false, "Save failed", storageSaveResult.getErrorMsg());
+        broadcastSaveResult(false, "Save failed", storageSaveResult.getReason());
     }
     else if (storageSaveResult.getResult() == StorageBase::UploadResult::Result::DOC_CHANGED
              || storageSaveResult.getResult() == StorageBase::UploadResult::Result::CONFLICT)
@@ -1257,7 +1258,8 @@ void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResu
             = isModified() ? "error: cmd=storage kind=documentconflict" : "close: documentconflict";
 
         broadcastMessage(message);
-        broadcastSaveResult(false, "Conflict: Document changed in storage", storageSaveResult.getErrorMsg());
+        broadcastSaveResult(false, "Conflict: Document changed in storage",
+                            storageSaveResult.getReason());
     }
 }
 
@@ -1393,6 +1395,7 @@ bool DocumentBroker::autoSave(const bool force, const bool dontSaveIfUnmodified)
         {
             save = true;
         }
+
         if (save)
         {
             LOG_TRC("Sending timed save command for [" << _docKey << "].");
@@ -2309,6 +2312,7 @@ bool DocumentBroker::forwardToChild(const std::string& viewId, const std::string
 
     // try the not yet created sessions
     LOG_WRN("Child session [" << viewId << "] not found to forward message: " << getAbbreviatedMessage(message));
+
     return false;
 }
 
@@ -2519,12 +2523,12 @@ bool ConvertToBroker::startConversion(SocketDisposition &disposition, const std:
             // First add and load the session.
             docBroker->addSession(docBroker->_clientSession);
 
-                     // Load the document manually and request saving in the target format.
-                     std::string encodedFrom;
-                     Poco::URI::encode(docBroker->getPublicUri().getPath(), "", encodedFrom);
-                     const std::string _load = "load url=" + encodedFrom;
-                     std::vector<char> loadRequest(_load.begin(), _load.end());
-                     docBroker->_clientSession->handleMessage(loadRequest);
+            // Load the document manually and request saving in the target format.
+            std::string encodedFrom;
+            Poco::URI::encode(docBroker->getPublicUri().getPath(), "", encodedFrom);
+            const std::string _load = "load url=" + encodedFrom;
+            std::vector<char> loadRequest(_load.begin(), _load.end());
+            docBroker->_clientSession->handleMessage(loadRequest);
 
             // Save is done in the setLoaded
         });
