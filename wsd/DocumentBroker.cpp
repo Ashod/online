@@ -1100,16 +1100,12 @@ void DocumentBroker::saveToStorageInternal(const std::string& sessionId, bool su
                       break;
               }
 
-              LOG_ERR("Failed to upload ["
-                      << _docKey << "] asynchronously, will fallback to synchronous uploading.");
-              const StorageBase::UploadResult& storageSaveResult
-                  = _storage->uploadLocalFileToStorage(auth, it->second->getCookies(), *_lockCtx,
-                                                       saveAsPath, saveAsFilename, isRename);
-              handleUploadToStorageResponse(storageSaveResult);
+              //FIXME: flag the failure so we retry.
+              LOG_ERR("Failed to upload [" << _docKey << "] asynchronously.");
           };
 
     _storage->uploadLocalFileToStorageAsync(auth, it->second->getCookies(), *_lockCtx, saveAsPath,
-                                            saveAsFilename, isRename, asyncUploadCallback);
+                                            saveAsFilename, isRename, *_poll, asyncUploadCallback);
 }
 
 void DocumentBroker::handleUploadToStorageResponse(const StorageBase::UploadResult& storageSaveResult)

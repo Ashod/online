@@ -1035,12 +1035,21 @@ std::string WopiStorage::downloadStorageFileToLocal(const Authorization& auth,
     return std::string();
 }
 
-StorageBase::UploadResult
-WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::string& cookies,
-                                      LockContext& lockCtx, const std::string& saveAsPath,
-                                      const std::string& saveAsFilename, const bool isRename)
+StorageBase::AsyncUpload
+WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, const std::string& cookies,
+                                           LockContext& lockCtx, const std::string& saveAsPath,
+                                           const std::string& saveAsFilename, const bool isRename,
+                                           SocketPoll& socketPoll, AsyncUploadCallback asyncUploadCallback)
+
 {
     // TODO: Check if this URI has write permission (canWrite = true)
+
+    //TODO: replace with state machine.
+    if (_uploadHttpSession)
+    {
+        LOG_ERR("Upload is already in progress.");
+        return AsyncUpload(AsyncUpload::State::Error, UploadResult(UploadResult::Result::FAILED));
+    }
 
     const bool isSaveAs = !saveAsPath.empty() && !saveAsFilename.empty();
     const std::string filePath(isSaveAs ? saveAsPath : getRootFilePath());
@@ -1050,7 +1059,8 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
     if (!fileStat.good())
     {
         LOG_ERR("Cannot access file [" << filePathAnonym << "] to upload to wopi storage.");
-        return UploadResult(UploadResult::Result::FAILED, "File not found.");
+        return AsyncUpload(AsyncUpload::State::Error,
+                           UploadResult(UploadResult::Result::FAILED, "File not found."));
     }
 
     const std::size_t size = (fileStat.good() ? fileStat.size() : 0);
@@ -1068,7 +1078,7 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
     const auto startTime = std::chrono::steady_clock::now();
     try
     {
-        std::shared_ptr<http::Session> httpSession = getHttpSession(uriObject);
+        _uploadHttpSession = getHttpSession(uriObject);
 
         http::Request httpRequest = initHttpRequest(uriObject, auth, cookies);
         httpRequest.setVerb(http::Request::VERB_POST);
@@ -1146,25 +1156,32 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
 
         httpRequest.setBodyFile(filePath);
 
-        // httpSession->asyncRequest(httpRequest, socketPoll);
-        LOG_INF(">>> Sync upload request: " << httpRequest.header().toString());
-        httpSession->syncRequest(httpRequest);
-        LOG_INF(">>> Finished sync upload.");
+        http::Session::FinishedCallback finishedCallback =
+            [&](const std::shared_ptr<http::Session>& httpSession) {
+                const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
-        const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
+                _wopiSaveDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - startTime);
 
-        _wopiSaveDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - startTime);
+                WopiUploadDetails details = { filePathAnonym,
+                                              uriAnonym,
+                                              httpResponse->statusLine().reasonPhrase(),
+                                              httpResponse->statusLine().statusCode(),
+                                              size,
+                                              isSaveAs,
+                                              isRename };
 
-        WopiUploadDetails details = { filePathAnonym,
-                                      uriAnonym,
-                                      httpResponse->statusLine().reasonPhrase(),
-                                      httpResponse->statusLine().statusCode(),
-                                      size,
-                                      isSaveAs,
-                                      isRename };
+                const StorageBase::UploadResult res
+                    = handleUploadToStorageResponse(details, httpResponse->getBody());
+                asyncUploadCallback(AsyncUpload(AsyncUpload::State::Success, res));
+            };
 
-        return handleUploadToStorageResponse(details, httpResponse->getBody());
+        _uploadHttpSession->setFinishedHandler(finishedCallback);
+
+        LOG_INF(">>> Async upload request: " << httpRequest.header().toString());
+        _uploadHttpSession->asyncRequest(httpRequest, socketPoll);
+
+        return AsyncUpload(AsyncUpload::State::Running, UploadResult(UploadResult::Result::OK));
     }
     catch (const Poco::Exception& ex)
     {
@@ -1177,7 +1194,16 @@ WopiStorage::uploadLocalFileToStorage(const Authorization& auth, const std::stri
         LOG_ERR("Cannot upload file to WOPI storage uri [" + uriAnonym + "]. Error: " << ex.what());
     }
 
-    return UploadResult(UploadResult::Result::FAILED, "Internal error.");
+    return AsyncUpload(AsyncUpload::State::Error,
+                       UploadResult(UploadResult::Result::FAILED, "Internal error."));
+}
+
+StorageBase::UploadResult WopiStorage::uploadLocalFileToStorage(const Authorization&,
+                                                                const std::string&, LockContext&,
+                                                                const std::string&,
+                                                                const std::string&, const bool)
+{
+    return UploadResult(UploadResult::Result::FAILED);
 }
 
 StorageBase::UploadResult

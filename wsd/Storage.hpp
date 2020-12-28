@@ -338,7 +338,7 @@ public:
     uploadLocalFileToStorageAsync(const Authorization& auth, const std::string& cookies,
                                   LockContext& lockCtx, const std::string& saveAsPath,
                                   const std::string& saveAsFilename, const bool isRename,
-                                  AsyncUploadCallback asyncUploadCallback)
+                                  SocketPoll&, AsyncUploadCallback asyncUploadCallback)
     {
         // By default do a synchronous save.
         const UploadResult res = uploadLocalFileToStorage(auth, cookies, lockCtx, saveAsPath,
@@ -627,6 +627,12 @@ public:
                                           const std::string& saveAsFilename,
                                           const bool isRename) override;
 
+    AsyncUpload uploadLocalFileToStorageAsync(const Authorization& auth, const std::string& cookies,
+                                              LockContext& lockCtx, const std::string& saveAsPath,
+                                              const std::string& saveAsFilename,
+                                              const bool isRename, SocketPoll& socketPoll,
+                                              AsyncUploadCallback asyncUploadCallback) override;
+
     /// Total time taken for making WOPI calls during load
     std::chrono::milliseconds getWopiLoadDuration() const { return _wopiLoadDuration; }
     std::chrono::milliseconds getWopiSaveDuration() const { return _wopiSaveDuration; }
@@ -661,6 +667,10 @@ private:
     // Time spend in loading the file from storage
     std::chrono::milliseconds _wopiLoadDuration;
     std::chrono::milliseconds _wopiSaveDuration;
+
+    /// The http::Session used for uploading asynchronously.
+    std::shared_ptr<http::Session> _uploadHttpSession;
+
     /// Whether or not to re-use cookies from the browser for the WOPI requests.
     bool _reuseCookies;
 };
