@@ -1157,7 +1157,7 @@ WopiStorage::uploadLocalFileToStorageAsync(const Authorization& auth, const std:
         httpRequest.setBodyFile(filePath);
 
         http::Session::FinishedCallback finishedCallback =
-            [&](const std::shared_ptr<http::Session>& httpSession) {
+            [=](const std::shared_ptr<http::Session>& httpSession) {
                 const std::shared_ptr<const http::Response> httpResponse = httpSession->response();
 
                 _wopiSaveDuration = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1253,8 +1253,8 @@ WopiStorage::handleUploadToStorageResponse(const WopiUploadDetails& details,
                 }
             }
 
-            LOG_INF(wopiLog << " uploaded " << details.size << " bytes from ["
-                            << details.filePathAnonym << "] -> [" << details.uriAnonym
+            LOG_INF(wopiLog << " uploaded " << details.size << " bytes in " << _wopiSaveDuration
+                            << " from [" << details.filePathAnonym << "] -> [" << details.uriAnonym
                             << "]: " << details.httpResponseCode << ' '
                             << details.httpResponseReason << ": " << responseString);
         }

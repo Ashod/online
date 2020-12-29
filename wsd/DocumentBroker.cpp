@@ -1080,7 +1080,8 @@ void DocumentBroker::saveToStorageInternal(const std::string& sessionId, bool su
                                                       isSaveAs, isRename);
 
     StorageBase::AsyncUploadCallback asyncUploadCallback
-        = [&](const StorageBase::AsyncUpload& asyncUp) {
+        = [this](const StorageBase::AsyncUpload& asyncUp) {
+            LOG_ERR(">>> onAsyncUploadCallback");
               switch (asyncUp.state())
               {
                   case StorageBase::AsyncUpload::State::Running:

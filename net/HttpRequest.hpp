@@ -22,6 +22,7 @@
 
 #include "Common.hpp"
 #include <net/Socket.hpp>
+#include <utility>
 #if ENABLE_SSL
 #include <net/SslSocket.hpp>
 #endif
@@ -549,10 +550,13 @@ private:
 class Response final
 {
 public:
-    Response()
+    using FinishedCallback = std::function<void()>;
+
+    Response(FinishedCallback finishedCallback)
         : _state(State::New)
         , _parserStage(ParserStage::StatusLine)
         , _recvBodySize(0)
+        , _finishedCallback(std::move(finishedCallback))
     {
         // By default we store the body in memory.
         saveBodyToMemory();
@@ -828,7 +832,7 @@ public:
 
         if (_parserStage == ParserStage::Finished)
         {
-            finish();
+            complete();
         }
 
         LOG_INF(">>> Done consuming response, had " << len << " bytes, consumed " << len - available
@@ -838,25 +842,29 @@ public:
 
     /// Signifies that we got all the data we expected
     /// and cleans up and updates the states.
-    void finish()
+    void complete()
     {
-        if (!done())
-        {
-            LOG_TRC(">>> State::Complete");
-            _bodyFile.close();
-            _state = State::Complete;
-        }
+        LOG_TRC(">>> State::Complete");
+        finish(State::Complete);
     }
 
     /// The request has exceeded the expected duration
     /// and has ended prematurely.
     void timeout()
     {
+        LOG_TRC(">>> State::Timeout");
+        finish(State::Timeout);
+    }
+
+private:
+    void finish(State state)
+    {
         if (!done())
         {
-            LOG_TRC(">>> State::Timeout");
+            LOG_TRC(">>> Finishing");
             _bodyFile.close();
-            _state = State::Timeout;
+            _state = state;
+            _finishedCallback();
         }
     }
 
@@ -878,6 +886,7 @@ private:
     std::string _body; //< Used when _bodyHandling is InMemory.
     std::ofstream _bodyFile; //< Used when _bodyHandling is OnDisk.
     IoWriteFunc _onBodyWriteCb; //< Used to handling body receipt in all cases.
+    FinishedCallback _finishedCallback; //< Called when response is finished.
 };
 
 /// A client socket to make asynchronous HTTP requests.
@@ -985,13 +994,13 @@ public:
     bool syncDownload(const Request& req, const std::string& saveToFilePath)
     {
         LOG_TRC("syncDownload");
-        _startTime = std::chrono::steady_clock::now();
 
-        _response.reset(new Response);
+        newRequest(req);
+
         if (!saveToFilePath.empty())
             _response->saveBodyToFile(saveToFilePath);
 
-        return syncRequestImpl(req);
+        return syncRequestImpl();
     }
 
     /// Make a synchronous request.
@@ -999,21 +1008,17 @@ public:
     bool syncRequest(const Request& req)
     {
         LOG_TRC("syncRequest");
-        _startTime = std::chrono::steady_clock::now();
 
-        _response.reset(new Response);
+        newRequest(req);
 
-        return syncRequestImpl(req);
+        return syncRequestImpl();
     }
 
     void asyncRequest(const Request& req, SocketPoll& poll)
     {
         LOG_TRC("asyncRequest");
-        _startTime = std::chrono::steady_clock::now();
 
-        _response.reset(new Response);
-        _request = req;
-        _request.header().set("Host", host()); // Make sure the host is set.
+        newRequest(req);
 
         if (!_connected && connect())
         {
@@ -1026,15 +1031,12 @@ public:
 
 private:
     /// Make a synchronous request.
-    bool syncRequestImpl(const Request& req)
+    bool syncRequestImpl()
     {
         const std::chrono::microseconds timeout = getTimeout();
         const auto deadline = std::chrono::steady_clock::now() + timeout;
 
         assert(!!_response && "Response must be set!");
-
-        _request = req;
-        _request.header().set("Host", host()); // Make sure the host is set.
 
         if (!_connected && !connect())
             return false;
@@ -1053,6 +1055,33 @@ private:
         }
 
         return _response->state() == Response::State::Complete;
+    }
+
+    /// Set up a new request and response.
+    void newRequest(Request req)
+    {
+        _startTime = std::chrono::steady_clock::now();
+
+        // Called when the response is finished.
+        // We really need only delegate it to our client.
+        // We need to do this extra hop because Response
+        // doesn't have our (Session) reference. Also,
+        // it's good that we are notified that the request
+        // has retired, so we can perform housekeeping.
+        Response::FinishedCallback onFinished = [&]() {
+            LOG_ERR(">>> onFinished");
+            assert(_response->done());
+            if (_onFinished)
+            {
+                LOG_ERR(">>> onFinished calling client");
+                _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
+            }
+        };
+
+        _response.reset(new Response(onFinished));
+
+        _request = std::move(req);
+        _request.header().set("Host", host()); // Make sure the host is set.
     }
 
     void onConnect(const std::shared_ptr<StreamSocket>& socket) override
@@ -1100,9 +1129,6 @@ private:
             disposition.setClosed();
             _socket->shutdown();
         }
-
-        if (_response->done() && _onFinished)
-            _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
     }
 
     void performWrites() override
@@ -1119,16 +1145,13 @@ private:
             LOG_TRC("Sending\n" << std::string(out.getBlock(), out.getBlockSize()));
             _socket->writeOutgoingData();
         }
-
-        if (_response->done() && _onFinished)
-            _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
     }
 
     void onDisconnect() override
     {
         LOG_TRC("onDisconnect");
         _connected = false;
-        _response->finish();
+        _response->complete();
     }
 
     bool connect();
@@ -1153,10 +1176,6 @@ private:
             _socket->closeConnection(); // Immediately disconnect.
             onDisconnect(); // Trigger manually (why wait for poll to do it?).
             assert(_connected == false);
-
-            // Notify that we finished the request.
-            if (_onFinished)
-                _onFinished(std::static_pointer_cast<Session>(shared_from_this()));
         }
     }
 
