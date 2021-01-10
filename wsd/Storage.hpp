@@ -22,6 +22,7 @@
 #include "Log.hpp"
 #include "Util.hpp"
 #include <common/Authorization.hpp>
+#include <net/HttpRequest.hpp>
 
 namespace Poco
 {
@@ -260,6 +261,7 @@ public:
 
     static bool allowedWopiHost(const std::string& host);
     static Poco::Net::HTTPClientSession* getHTTPClientSession(const Poco::URI& uri);
+    static std::shared_ptr<http::Session> getHttpSession(const Poco::URI& uri);
 
 protected:
 
